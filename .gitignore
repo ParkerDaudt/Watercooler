@@ -6,7 +6,6 @@ dist/
 *.log
 data/
 .turbo
-.claude/settings.local.json
-.claude/plans/
+.claude/
 *.tsbuildinfo
 nul
