@@ -138,7 +138,7 @@ Open http://localhost:3000. The bootstrap wizard will guide you through creating
 ### 1. Clone and configure
 
 ```bash
-git clone <your-repo-url> && cd watercooler
+git clone https://github.com/ParkerDaudt/Watercooler && cd Watercooler
 cp infra/.env.example .env
 ```
 
