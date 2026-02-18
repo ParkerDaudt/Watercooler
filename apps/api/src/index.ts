@@ -22,7 +22,7 @@ import { searchRoutes } from "./routes/search.js";
 import { roleRoutes } from "./routes/roles.js";
 import { channelPermissionRoutes } from "./routes/channelPermissions.js";
 import { ZodError } from "zod";
-import { join } from "path";
+import { join, resolve, extname } from "path";
 import { readFileSync, existsSync } from "fs";
 
 const app = Fastify({
@@ -48,11 +48,35 @@ await app.register(rateLimit, {
   allowList: [],
 });
 
+// CSRF: verify Origin header on state-changing requests
+app.addHook("onRequest", async (request, reply) => {
+  const method = request.method;
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
+
+  const origin = request.headers.origin;
+  if (origin && origin !== env.CORS_ORIGIN) {
+    reply.code(403).send({ error: "Invalid origin" });
+  }
+});
+
+// Security headers
+app.addHook("onSend", async (_request, reply) => {
+  reply.header("X-Content-Type-Options", "nosniff");
+  reply.header("X-Frame-Options", "DENY");
+  reply.header("X-XSS-Protection", "0"); // modern browsers use CSP instead
+  reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
+  reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'");
+  if (env.NODE_ENV === "production") {
+    reply.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+});
+
 // Stricter rate limit for auth endpoints
 await app.register(
   async (instance) => {
     await instance.register(rateLimit, {
-      max: 20,
+      max: 5,
       timeWindow: "1 minute",
     });
     await authRoutes(instance);
@@ -72,16 +96,35 @@ app.setErrorHandler((error, _request, reply) => {
     return reply.code(429).send({ error: "Too many requests" });
   }
   app.log.error(error);
-  reply.code(error.statusCode ?? 500).send({ error: error.message ?? "Internal server error" });
+  const status = error.statusCode ?? 500;
+  const message = status >= 500 && env.NODE_ENV === "production"
+    ? "Internal server error"
+    : (error.message ?? "Internal server error");
+  reply.code(status).send({ error: message });
 });
+
+// MIME type map for uploaded files
+const MIME_MAP: Record<string, string> = {
+  ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".png": "image/png", ".gif": "image/gif",
+  ".webp": "image/webp", ".pdf": "application/pdf",
+};
 
 // Serve uploaded files
 app.get("/uploads/*", async (request, reply) => {
   const filePath = (request.params as { "*": string })["*"];
-  const fullPath = join(env.UPLOAD_DIR, filePath);
+  const fullPath = resolve(env.UPLOAD_DIR, filePath);
+  if (!fullPath.startsWith(resolve(env.UPLOAD_DIR))) {
+    return reply.code(400).send({ error: "Invalid path" });
+  }
   if (!existsSync(fullPath)) {
     return reply.code(404).send({ error: "File not found" });
   }
+  const ext = extname(fullPath).toLowerCase();
+  const mime = MIME_MAP[ext] || "application/octet-stream";
+  const disposition = mime.startsWith("image/") ? "inline" : "attachment";
+  reply.header("Content-Type", mime);
+  reply.header("Content-Disposition", disposition);
   const data = readFileSync(fullPath);
   reply.send(data);
 });

@@ -7,6 +7,35 @@ import { computeEffectivePermissions } from "./services/permissions.js";
 import { processLinkPreviews } from "./services/linkPreviews.js";
 import type { ServerToClientEvents, ClientToServerEvents, UserStatus } from "@watercooler/shared";
 
+/** Strip HTML/script tags from user content to prevent stored XSS. */
+function sanitizeContent(text: string): string {
+  return text.replace(/<\/?[^>]+(>|$)/g, "");
+}
+
+/** Parse a cookie header string into key-value pairs. */
+function parseCookies(header: string): Record<string, string> {
+  const cookies: Record<string, string> = {};
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key) cookies[key] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+/** Maximum number of @mentions processed per message. */
+const MAX_MENTIONS_PER_MESSAGE = 10;
+
+interface SocketData {
+  userId: string;
+  username: string;
+  avatarUrl: string;
+  userStatus: UserStatus;
+  customStatus: string;
+}
+
 let io: SocketIOServer<ClientToServerEvents, ServerToClientEvents>;
 
 // Track online users in memory: userId -> { status, customStatus }
@@ -27,46 +56,56 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
   });
 
   io.use(async (socket, next) => {
+    const clientIp = socket.handshake.address;
     try {
       // Try auth token first (passed from client), then fall back to cookie
-      let token = (socket.handshake.auth as any)?.token;
+      let token = (socket.handshake.auth as Record<string, unknown>)?.token as string | undefined;
       if (!token) {
         const cookieHeader = socket.handshake.headers.cookie;
         if (cookieHeader) {
-          const sessionMatch = cookieHeader.match(/session=([^;]+)/);
-          if (sessionMatch) token = sessionMatch[1];
+          token = parseCookies(cookieHeader).session;
         }
       }
-      if (!token) return next(new Error("No session"));
+      if (!token) {
+        console.warn(`[auth] Socket connection rejected: no session (ip=${clientIp})`);
+        return next(new Error("No session"));
+      }
 
       const result = await verifyToken(token);
-      if (!result) return next(new Error("Invalid session"));
+      if (!result) {
+        console.warn(`[auth] Socket connection rejected: invalid token (ip=${clientIp})`);
+        return next(new Error("Invalid session"));
+      }
 
       const [user] = await db
         .select({ id: schema.users.id, username: schema.users.username, avatarUrl: schema.users.avatarUrl, status: schema.users.status, customStatus: schema.users.customStatus, tokenVersion: schema.users.tokenVersion })
         .from(schema.users)
         .where(eq(schema.users.id, result.userId))
         .limit(1);
-      if (!user) return next(new Error("User not found"));
-      if (user.tokenVersion !== result.tokenVersion) return next(new Error("Session expired"));
+      if (!user) {
+        console.warn(`[auth] Socket connection rejected: user not found (userId=${result.userId}, ip=${clientIp})`);
+        return next(new Error("User not found"));
+      }
+      if (user.tokenVersion !== result.tokenVersion) {
+        console.warn(`[auth] Socket connection rejected: expired token version (userId=${user.id}, ip=${clientIp})`);
+        return next(new Error("Session expired"));
+      }
 
-      (socket.data as any).userId = user.id;
-      (socket.data as any).username = user.username;
-      (socket.data as any).avatarUrl = user.avatarUrl || "";
-      (socket.data as any).userStatus = user.status || "online";
-      (socket.data as any).customStatus = user.customStatus || "";
+      const data = socket.data as SocketData;
+      data.userId = user.id;
+      data.username = user.username;
+      data.avatarUrl = user.avatarUrl || "";
+      data.userStatus = (user.status as UserStatus) || "online";
+      data.customStatus = user.customStatus || "";
       next();
     } catch {
+      console.warn(`[auth] Socket connection rejected: unexpected error (ip=${clientIp})`);
       next(new Error("Auth failed"));
     }
   });
 
   io.on("connection", (socket) => {
-    const userId = (socket.data as any).userId as string;
-    const username = (socket.data as any).username as string;
-    const avatarUrl = ((socket.data as any).avatarUrl || "") as string;
-    const savedStatus = ((socket.data as any).userStatus || "online") as UserStatus;
-    const savedCustomStatus = ((socket.data as any).customStatus || "") as string;
+    const { userId, username, avatarUrl, userStatus: savedStatus, customStatus: savedCustomStatus } = socket.data as SocketData;
 
     // --- Presence ---
     onlineUsers.set(userId, { status: savedStatus, customStatus: savedCustomStatus });
@@ -81,7 +120,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
       // Check if user has any other connected sockets
       const sockets = await io.fetchSockets();
       const stillConnected = sockets.some(
-        (s) => (s.data as any).userId === userId && s.id !== socket.id
+        (s) => (s.data as SocketData).userId === userId && s.id !== socket.id
       );
       if (!stillConnected) {
         onlineUsers.delete(userId);
@@ -152,6 +191,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
         if (!data.content || data.content.length > 4000) {
           return callback({ ok: false, error: "Invalid message" });
         }
+        data.content = sanitizeContent(data.content);
 
         // Check membership and timeout
         const [community] = await db.select().from(schema.communities).limit(1);
@@ -266,10 +306,12 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
         // Process link previews asynchronously
         processLinkPreviews(message.id, data.channelId, data.content);
 
-        // Handle @mentions
+        // Handle @mentions (capped to prevent abuse)
         const mentionRegex = /@(\w+)/g;
         let match;
-        while ((match = mentionRegex.exec(data.content)) !== null) {
+        let mentionCount = 0;
+        while ((match = mentionRegex.exec(data.content)) !== null && mentionCount < MAX_MENTIONS_PER_MESSAGE) {
+          mentionCount++;
           const [mentioned] = await db
             .select()
             .from(schema.users)
@@ -294,7 +336,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
             // Emit notification to mentioned user's sockets
             const sockets = await io.fetchSockets();
             for (const s of sockets) {
-              if ((s.data as any).userId === mentioned.id) {
+              if ((s.data as SocketData).userId === mentioned.id) {
                 s.emit("notification", {
                   ...notif,
                   payload: notif.payload as Record<string, unknown>,
@@ -318,6 +360,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
         if (!data.content || data.content.length > 4000) {
           return callback({ ok: false, error: "Invalid message" });
         }
+        data.content = sanitizeContent(data.content);
 
         const [msg] = await db
           .select()
@@ -365,6 +408,11 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
         if (msg.userId !== userId) return callback({ ok: false, error: "Not your message" });
 
         await db.delete(schema.messages).where(eq(schema.messages.id, data.messageId));
+
+        // Clean up notifications referencing this message
+        await db.delete(schema.notifications).where(
+          sql`payload_json->>'messageId' = ${data.messageId}`
+        );
 
         // Decrement reply count on parent if this was a reply
         if (msg.replyToId) {

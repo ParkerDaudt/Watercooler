@@ -19,6 +19,12 @@ import {
   type AuthedRequest,
 } from "../auth.js";
 
+const ROLE_RANK: Record<string, number> = { owner: 0, moderator: 1, member: 2 };
+
+function outranks(actor: string, target: string): boolean {
+  return (ROLE_RANK[actor] ?? 99) < (ROLE_RANK[target] ?? 99);
+}
+
 export async function moderationRoutes(app: FastifyInstance) {
   const preHandler = [authHook, communityHook];
   // Kick
@@ -38,7 +44,9 @@ export async function moderationRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!target) return reply.code(404).send({ error: "User not found" });
-    if (target.role === "owner") return reply.code(403).send({ error: "Cannot kick owner" });
+    if (!outranks(req.membership.role, target.role)) {
+      return reply.code(403).send({ error: "Cannot act on a user with equal or higher role" });
+    }
 
     await db.delete(schema.memberships).where(eq(schema.memberships.id, target.id));
 
@@ -70,7 +78,9 @@ export async function moderationRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!target) return reply.code(404).send({ error: "User not found" });
-    if (target.role === "owner") return reply.code(403).send({ error: "Cannot ban owner" });
+    if (!outranks(req.membership.role, target.role)) {
+      return reply.code(403).send({ error: "Cannot act on a user with equal or higher role" });
+    }
 
     await db
       .update(schema.memberships)
@@ -106,7 +116,9 @@ export async function moderationRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!target) return reply.code(404).send({ error: "User not found" });
-    if (target.role === "owner") return reply.code(403).send({ error: "Cannot timeout owner" });
+    if (!outranks(req.membership.role, target.role)) {
+      return reply.code(403).send({ error: "Cannot act on a user with equal or higher role" });
+    }
 
     await db
       .update(schema.memberships)
@@ -140,6 +152,11 @@ export async function moderationRoutes(app: FastifyInstance) {
 
     await db.delete(schema.messages).where(eq(schema.messages.id, messageId));
 
+    // Clean up notifications referencing this message
+    await db.delete(schema.notifications).where(
+      sql`payload_json->>'messageId' = ${messageId}`
+    );
+
     await db.insert(schema.auditLogs).values({
       communityId: req.communityId,
       actorId: req.user.id,
@@ -163,7 +180,7 @@ export async function moderationRoutes(app: FastifyInstance) {
         timeoutUntil: schema.memberships.timeoutUntil,
         joinedAt: schema.memberships.joinedAt,
         username: schema.users.username,
-        email: schema.users.email,
+        avatarUrl: schema.users.avatarUrl,
       })
       .from(schema.memberships)
       .innerJoin(schema.users, eq(schema.memberships.userId, schema.users.id))
@@ -249,7 +266,9 @@ export async function moderationRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!target) return reply.code(404).send({ error: "User not found" });
-    if (target.role === "owner") return reply.code(403).send({ error: "Cannot warn owner" });
+    if (!outranks(req.membership.role, target.role)) {
+      return reply.code(403).send({ error: "Cannot act on a user with equal or higher role" });
+    }
 
     const [warning] = await db.insert(schema.warnings).values({
       communityId: req.communityId,
@@ -419,16 +438,18 @@ export async function moderationRoutes(app: FastifyInstance) {
       .orderBy(desc(schema.reports.createdAt));
   });
 
-  app.patch("/api/reports/:reportId", { preHandler: [...preHandler, requirePermission("manageMembers")] }, async (request) => {
+  app.patch("/api/reports/:reportId", { preHandler: [...preHandler, requirePermission("manageMembers")] }, async (request, reply) => {
+    const req = request as AuthedRequest;
     const { reportId } = request.params as { reportId: string };
     const data = updateReportSchema.parse(request.body);
 
     const [report] = await db
       .update(schema.reports)
       .set({ status: data.status })
-      .where(eq(schema.reports.id, reportId))
+      .where(and(eq(schema.reports.id, reportId), eq(schema.reports.communityId, req.communityId)))
       .returning();
 
+    if (!report) return reply.code(404).send({ error: "Report not found" });
     return report;
   });
 

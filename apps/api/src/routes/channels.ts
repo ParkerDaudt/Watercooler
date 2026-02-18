@@ -156,14 +156,25 @@ export async function channelRoutes(app: FastifyInstance) {
         return channel;
       }
 
-      // Get the other user's info for channel name
+      // Verify target user exists and is an active community member
       const [otherUser] = await db
         .select({ username: schema.users.username })
         .from(schema.users)
-        .where(eq(schema.users.id, data.userId));
+        .where(eq(schema.users.id, data.userId))
+        .limit(1);
 
       if (!otherUser) {
         return reply.code(404).send({ error: "User not found" });
+      }
+
+      const [targetMembership] = await db
+        .select({ status: schema.memberships.status })
+        .from(schema.memberships)
+        .where(and(eq(schema.memberships.userId, data.userId), eq(schema.memberships.communityId, req.communityId)))
+        .limit(1);
+
+      if (!targetMembership || targetMembership.status === "banned") {
+        return reply.code(400).send({ error: "Cannot message this user" });
       }
 
       // Create DM channel
@@ -189,7 +200,7 @@ export async function channelRoutes(app: FastifyInstance) {
   app.patch(
     "/api/channels/:channelId",
     { preHandler: [...preHandler, requirePermission("manageChannels")] },
-    async (request) => {
+    async (request, reply) => {
       const req = request as AuthedRequest;
       const { channelId } = request.params as { channelId: string };
       const data = updateChannelSchema.parse(request.body);
@@ -197,8 +208,9 @@ export async function channelRoutes(app: FastifyInstance) {
       const [channel] = await db
         .update(schema.channels)
         .set(data)
-        .where(eq(schema.channels.id, channelId))
+        .where(and(eq(schema.channels.id, channelId), eq(schema.channels.communityId, req.communityId)))
         .returning();
+      if (!channel) return reply.code(404).send({ error: "Channel not found" });
       return channel;
     }
   );
@@ -206,11 +218,14 @@ export async function channelRoutes(app: FastifyInstance) {
   app.delete(
     "/api/channels/:channelId",
     { preHandler: [...preHandler, requirePermission("manageChannels")] },
-    async (request) => {
+    async (request, reply) => {
       const req = request as AuthedRequest;
       const { channelId } = request.params as { channelId: string };
 
-      await db.delete(schema.channels).where(eq(schema.channels.id, channelId));
+      const [deleted] = await db.delete(schema.channels)
+        .where(and(eq(schema.channels.id, channelId), eq(schema.channels.communityId, req.communityId)))
+        .returning({ id: schema.channels.id });
+      if (!deleted) return reply.code(404).send({ error: "Channel not found" });
 
       await db.insert(schema.auditLogs).values({
         communityId: req.communityId,

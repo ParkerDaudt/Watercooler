@@ -12,7 +12,7 @@ export async function createToken(userId: string, tokenVersion: number = 0): Pro
   return new SignJWT({ sub: userId, tv: tokenVersion })
     .setProtectedHeader({ alg: ALG })
     .setIssuedAt()
-    .setExpirationTime("7d")
+    .setExpirationTime("24h")
     .sign(secret);
 }
 
@@ -34,7 +34,7 @@ export function setAuthCookie(reply: FastifyReply, token: string) {
     secure: env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: 60 * 60 * 24,
   });
 }
 
@@ -144,6 +144,42 @@ export async function communityHook(request: FastifyRequest, reply: FastifyReply
   // Compute effective permissions from custom roles
   const permissions = await computeEffectivePermissions(membership.id);
   (request as AuthedRequest).permissions = permissions;
+}
+
+/** Verify the user can access the given channel (community or DM membership). */
+export async function verifyChannelAccess(
+  channelId: string,
+  userId: string,
+  communityId: string,
+): Promise<{ ok: true; channel: { id: string; type: string; isPrivate: boolean; isAnnouncement: boolean; communityId: string | null } } | { ok: false; error: string; code: number }> {
+  const [channel] = await db
+    .select({ id: schema.channels.id, type: schema.channels.type, isPrivate: schema.channels.isPrivate, isAnnouncement: schema.channels.isAnnouncement, communityId: schema.channels.communityId })
+    .from(schema.channels)
+    .where(eq(schema.channels.id, channelId))
+    .limit(1);
+
+  if (!channel) return { ok: false, error: "Channel not found", code: 404 };
+
+  if (channel.type === "dm") {
+    const [participant] = await db
+      .select({ id: schema.dmParticipants.id })
+      .from(schema.dmParticipants)
+      .where(and(eq(schema.dmParticipants.channelId, channelId), eq(schema.dmParticipants.userId, userId)))
+      .limit(1);
+    if (!participant) return { ok: false, error: "Not a participant of this conversation", code: 403 };
+  } else {
+    if (channel.communityId !== communityId) return { ok: false, error: "Channel not found", code: 404 };
+    if (channel.isPrivate) {
+      const [member] = await db
+        .select({ id: schema.channelMembers.id })
+        .from(schema.channelMembers)
+        .where(and(eq(schema.channelMembers.channelId, channelId), eq(schema.channelMembers.userId, userId)))
+        .limit(1);
+      if (!member) return { ok: false, error: "No access to this channel", code: 403 };
+    }
+  }
+
+  return { ok: true, channel };
 }
 
 export function requireRole(...roles: string[]) {

@@ -1,9 +1,17 @@
 import { z } from "zod";
 
 // Auth
+const passwordSchema = z
+  .string()
+  .min(8, "Password must be at least 8 characters")
+  .max(128)
+  .regex(/[a-z]/, "Password must contain a lowercase letter")
+  .regex(/[A-Z]/, "Password must contain an uppercase letter")
+  .regex(/[0-9]/, "Password must contain a digit");
+
 export const signupSchema = z.object({
   email: z.string().email().max(255),
-  password: z.string().min(8).max(128),
+  password: passwordSchema,
   username: z
     .string()
     .min(2)
@@ -19,7 +27,7 @@ export const loginSchema = z.object({
 
 export const bootstrapSchema = z.object({
   email: z.string().email().max(255),
-  password: z.string().min(8).max(128),
+  password: passwordSchema,
   username: z.string().min(2).max(32),
   communityName: z.string().min(1).max(100),
 });
@@ -46,7 +54,7 @@ export const updateUserProfileSchema = z.object({
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(8).max(128),
+  newPassword: passwordSchema,
 });
 
 // User status
@@ -117,7 +125,10 @@ export const rsvpSchema = z.object({
 export const createInviteSchema = z.object({
   maxUses: z.number().int().min(0).max(10000).default(0),
   expiresAt: z.string().datetime().nullable().optional(),
-});
+}).refine(
+  (data) => !data.expiresAt || new Date(data.expiresAt) > new Date(),
+  { message: "Expiration date must be in the future", path: ["expiresAt"] }
+);
 
 export const joinViaInviteSchema = z.object({
   code: z.string().min(1).max(32),
@@ -173,7 +184,7 @@ export const reportActionSchema = z.object({
 export const resetPasswordSchema = z.object({
   email: z.string().email(),
   recoveryKey: z.string().min(1),
-  newPassword: z.string().min(8).max(128),
+  newPassword: passwordSchema,
 });
 
 // Message Search

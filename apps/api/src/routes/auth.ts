@@ -7,7 +7,38 @@ import { signupSchema, loginSchema, bootstrapSchema, resetPasswordSchema } from 
 import { createToken, setAuthCookie, clearAuthCookie, authHook, type AuthedRequest } from "../auth.js";
 
 function generateRecoveryKey(): string {
-  return randomBytes(16).toString("hex");
+  return randomBytes(32).toString("hex");
+}
+
+// In-memory per-account login lockout
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+function checkAccountLockout(email: string): { locked: boolean; retryAfter?: number } {
+  const entry = loginAttempts.get(email);
+  if (!entry) return { locked: false };
+  if (Date.now() > entry.lockedUntil) {
+    loginAttempts.delete(email);
+    return { locked: false };
+  }
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
+    return { locked: true, retryAfter: Math.ceil((entry.lockedUntil - Date.now()) / 1000) };
+  }
+  return { locked: false };
+}
+
+function recordFailedLogin(email: string) {
+  const entry = loginAttempts.get(email) || { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+  }
+  loginAttempts.set(email, entry);
+}
+
+function clearFailedLogins(email: string) {
+  loginAttempts.delete(email);
 }
 
 /** Create default Owner/Moderator/Member roles for a new community */
@@ -140,21 +171,17 @@ export async function authRoutes(app: FastifyInstance) {
     const recoveryKeyHash = await hash(recoveryKey);
 
     const [existingEmail] = await db
-      .select()
+      .select({ id: schema.users.id })
       .from(schema.users)
       .where(eq(schema.users.email, data.email))
       .limit(1);
-    if (existingEmail) {
-      return reply.code(409).send({ error: "Email already registered" });
-    }
-
     const [existingUsername] = await db
-      .select()
+      .select({ id: schema.users.id })
       .from(schema.users)
       .where(eq(schema.users.username, data.username))
       .limit(1);
-    if (existingUsername) {
-      return reply.code(409).send({ error: "Username already taken" });
+    if (existingEmail || existingUsername) {
+      return reply.code(409).send({ error: "Email or username is unavailable" });
     }
 
     // Create user and membership atomically
@@ -174,7 +201,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     await db
       .update(schema.invites)
-      .set({ uses: invite.uses + 1 })
+      .set({ uses: sql`${schema.invites.uses} + 1` })
       .where(eq(schema.invites.id, invite.id));
 
     const token = await createToken(user.id);
@@ -184,6 +211,14 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post("/api/auth/login", async (request, reply) => {
     const data = loginSchema.parse(request.body);
+
+    // Check per-account lockout
+    const lockout = checkAccountLockout(data.email);
+    if (lockout.locked) {
+      console.warn(`[auth] Account locked out: email=${data.email} ip=${request.ip}`);
+      return reply.code(429).send({ error: "Too many failed attempts. Try again later.", retryAfter: lockout.retryAfter });
+    }
+
     const [user] = await db
       .select()
       .from(schema.users)
@@ -191,9 +226,12 @@ export async function authRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!user || !(await verify(user.passwordHash, data.password))) {
+      recordFailedLogin(data.email);
+      console.warn(`[auth] Failed login attempt for email=${data.email} ip=${request.ip}`);
       return reply.code(401).send({ error: "Invalid email or password" });
     }
 
+    clearFailedLogins(data.email);
     const token = await createToken(user.id, user.tokenVersion);
     setAuthCookie(reply, token);
     return { user: { id: user.id, email: user.email, username: user.username } };
@@ -220,11 +258,13 @@ export async function authRoutes(app: FastifyInstance) {
       .limit(1);
 
     if (!user || !user.recoveryKeyHash) {
+      console.warn(`[auth] Failed password reset: invalid email (email=${data.email}, ip=${request.ip})`);
       return reply.code(401).send({ error: "Invalid email or recovery key" });
     }
 
     const valid = await verify(user.recoveryKeyHash, data.recoveryKey);
     if (!valid) {
+      console.warn(`[auth] Failed password reset: invalid recovery key (email=${data.email}, ip=${request.ip})`);
       return reply.code(401).send({ error: "Invalid email or recovery key" });
     }
 

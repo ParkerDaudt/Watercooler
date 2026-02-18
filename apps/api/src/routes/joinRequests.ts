@@ -88,7 +88,7 @@ export async function joinRequestRoutes(app: FastifyInstance) {
       const [jr] = await db
         .select()
         .from(schema.joinRequests)
-        .where(eq(schema.joinRequests.id, requestId))
+        .where(and(eq(schema.joinRequests.id, requestId), eq(schema.joinRequests.communityId, req.communityId)))
         .limit(1);
 
       if (!jr) return reply.code(404).send({ error: "Not found" });

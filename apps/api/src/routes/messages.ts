@@ -9,15 +9,23 @@ import {
   communityHook,
   requireRole,
   requireNotTimedOut,
+  verifyChannelAccess,
   type AuthedRequest,
 } from "../auth.js";
+
+function sanitizeContent(text: string): string {
+  return text.replace(/<\/?[^>]+(>|$)/g, "");
+}
 
 export async function messageRoutes(app: FastifyInstance) {
   const preHandler = [authHook, communityHook];
 
   // Paginated message history
-  app.get("/api/channels/:channelId/messages", { preHandler }, async (request) => {
+  app.get("/api/channels/:channelId/messages", { preHandler }, async (request, reply) => {
+    const req = request as AuthedRequest;
     const { channelId } = request.params as { channelId: string };
+    const access = await verifyChannelAccess(channelId, req.user.id, req.communityId);
+    if (!access.ok) return reply.code(access.code).send({ error: access.error });
     const { cursor, limit } = paginationSchema.parse(request.query);
 
     const conditions = [eq(schema.messages.channelId, channelId)];
@@ -137,17 +145,14 @@ export async function messageRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const req = request as AuthedRequest;
       const { channelId } = request.params as { channelId: string };
+      const access = await verifyChannelAccess(channelId, req.user.id, req.communityId);
+      if (!access.ok) return reply.code(access.code).send({ error: access.error });
       const data = sendMessageSchema.parse(request.body);
-
-      const [channel] = await db
-        .select({ type: schema.channels.type, isAnnouncement: schema.channels.isAnnouncement })
-        .from(schema.channels)
-        .where(eq(schema.channels.id, channelId))
-        .limit(1);
+      data.content = sanitizeContent(data.content);
 
       if (
-        channel?.type === "channel" &&
-        channel?.isAnnouncement &&
+        access.channel.type === "channel" &&
+        access.channel.isAnnouncement &&
         !["owner", "moderator"].includes(req.membership.role)
       ) {
         return reply.code(403).send({ error: "This channel is read-only. Only staff can post." });
@@ -158,10 +163,12 @@ export async function messageRoutes(app: FastifyInstance) {
         .values({ channelId, userId: req.user.id, content: data.content })
         .returning();
 
-      // Extract @mentions and create notifications
+      // Extract @mentions and create notifications (capped to prevent abuse)
       const mentionRegex = /@(\w+)/g;
       let match;
-      while ((match = mentionRegex.exec(data.content)) !== null) {
+      let mentionCount = 0;
+      while ((match = mentionRegex.exec(data.content)) !== null && mentionCount < 10) {
+        mentionCount++;
         const [mentioned] = await db
           .select()
           .from(schema.users)
@@ -197,8 +204,11 @@ export async function messageRoutes(app: FastifyInstance) {
   );
 
   // Get pinned messages for a channel
-  app.get("/api/channels/:channelId/pins", { preHandler }, async (request) => {
+  app.get("/api/channels/:channelId/pins", { preHandler }, async (request, reply) => {
+    const req = request as AuthedRequest;
     const { channelId } = request.params as { channelId: string };
+    const access = await verifyChannelAccess(channelId, req.user.id, req.communityId);
+    if (!access.ok) return reply.code(access.code).send({ error: access.error });
 
     const msgs = await db
       .select({

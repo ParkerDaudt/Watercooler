@@ -15,6 +15,27 @@ import { randomUUID } from "crypto";
 import { mkdir, writeFile } from "fs/promises";
 import { join, extname } from "path";
 
+// Magic byte signatures for avatar image validation
+const IMAGE_MAGIC: Array<{ mime: string; bytes: number[] }> = [
+  { mime: "image/jpeg", bytes: [0xFF, 0xD8, 0xFF] },
+  { mime: "image/png", bytes: [0x89, 0x50, 0x4E, 0x47] },
+  { mime: "image/gif", bytes: [0x47, 0x49, 0x46, 0x38] },
+];
+
+function detectImageMime(buffer: Buffer): string | null {
+  // WebP: RIFF at 0, WEBP at 8
+  if (buffer.length >= 12 &&
+      buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+      buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50) {
+    return "image/webp";
+  }
+  for (const sig of IMAGE_MAGIC) {
+    if (buffer.length < sig.bytes.length) continue;
+    if (sig.bytes.every((b, i) => buffer[i] === b)) return sig.mime;
+  }
+  return null;
+}
+
 export async function userRoutes(app: FastifyInstance) {
   const preHandler = [authHook, communityHook];
 
@@ -218,8 +239,14 @@ export async function userRoutes(app: FastifyInstance) {
       return reply.code(413).send({ error: "Avatar must be under 2MB" });
     }
 
+    // Verify actual file content matches claimed MIME type
+    const detectedMime = detectImageMime(buffer);
+    if (!detectedMime || !allowedMimes.includes(detectedMime)) {
+      return reply.code(400).send({ error: "File content does not match an allowed image type" });
+    }
+
     const fileId = randomUUID();
-    const ext = extname(data.filename) || ".png";
+    const ext = extname(data.filename).replace(/[^a-zA-Z0-9.]/g, "") || ".png";
     const filename = `${fileId}${ext}`;
     const avatarDir = join(env.UPLOAD_DIR, "avatars");
     await mkdir(avatarDir, { recursive: true });

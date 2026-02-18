@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq, and, asc } from "drizzle-orm";
+import { eq, and, asc, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { db, schema } from "../db/index.js";
 import { createInviteSchema, joinViaInviteSchema } from "@watercooler/shared";
@@ -50,9 +50,13 @@ export async function inviteRoutes(app: FastifyInstance) {
   app.delete(
     "/api/invites/:inviteId",
     { preHandler: [...preHandler, requirePermission("createInvites")] },
-    async (request) => {
+    async (request, reply) => {
+      const req = request as AuthedRequest;
       const { inviteId } = request.params as { inviteId: string };
-      await db.delete(schema.invites).where(eq(schema.invites.id, inviteId));
+      const [deleted] = await db.delete(schema.invites)
+        .where(and(eq(schema.invites.id, inviteId), eq(schema.invites.communityId, req.communityId)))
+        .returning({ id: schema.invites.id });
+      if (!deleted) return reply.code(404).send({ error: "Invite not found" });
       return { ok: true };
     }
   );
@@ -112,7 +116,7 @@ export async function inviteRoutes(app: FastifyInstance) {
 
     await db
       .update(schema.invites)
-      .set({ uses: invite.uses + 1 })
+      .set({ uses: sql`${schema.invites.uses} + 1` })
       .where(eq(schema.invites.id, invite.id));
 
     return { ok: true, communityId: invite.communityId };
