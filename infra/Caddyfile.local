@@ -1,0 +1,21 @@
+:80 {
+	# Frontend
+	handle /* {
+		reverse_proxy web:3000
+	}
+
+	# API routes
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	# Uploads
+	handle /uploads/* {
+		reverse_proxy api:3001
+	}
+
+	# WebSocket - Socket.IO
+	handle /socket.io/* {
+		reverse_proxy api:3001
+	}
+}

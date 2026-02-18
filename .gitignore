@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+*.log
+data/
+.turbo
+.claude/settings.local.json
+.claude/plans/
+*.tsbuildinfo
+nul

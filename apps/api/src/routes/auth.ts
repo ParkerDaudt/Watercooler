@@ -1,0 +1,249 @@
+import type { FastifyInstance } from "fastify";
+import { randomBytes } from "crypto";
+import { hash, verify } from "argon2";
+import { eq, and, sql } from "drizzle-orm";
+import { db, schema } from "../db/index.js";
+import { signupSchema, loginSchema, bootstrapSchema, resetPasswordSchema } from "@watercooler/shared";
+import { createToken, setAuthCookie, clearAuthCookie, authHook, type AuthedRequest } from "../auth.js";
+
+function generateRecoveryKey(): string {
+  return randomBytes(16).toString("hex");
+}
+
+/** Create default Owner/Moderator/Member roles for a new community */
+async function createDefaultRoles(communityId: string) {
+  const [ownerRole] = await db.insert(schema.roles).values({
+    communityId, name: "Owner", color: "#ed4245", position: 0,
+  }).returning();
+  const [modRole] = await db.insert(schema.roles).values({
+    communityId, name: "Moderator", color: "#5865f2", position: 1,
+  }).returning();
+  const [memberRole] = await db.insert(schema.roles).values({
+    communityId, name: "Member", color: "#99aab5", position: 2, isDefault: true, isEveryone: true,
+  }).returning();
+
+  // Owner: all permissions
+  await db.insert(schema.rolePermissions).values({
+    roleId: ownerRole.id,
+    manageCommunity: true, manageRoles: true, manageChannels: true, manageMembers: true,
+    createInvites: true, sendMessages: true, manageMessages: true, pinMessages: true,
+    kickMembers: true, banMembers: true, timeoutMembers: true,
+  });
+  // Moderator: moderate permissions
+  await db.insert(schema.rolePermissions).values({
+    roleId: modRole.id,
+    manageCommunity: false, manageRoles: false, manageChannels: true, manageMembers: true,
+    createInvites: true, sendMessages: true, manageMessages: true, pinMessages: true,
+    kickMembers: true, banMembers: true, timeoutMembers: true,
+  });
+  // Member: basic permissions
+  await db.insert(schema.rolePermissions).values({
+    roleId: memberRole.id,
+    manageCommunity: false, manageRoles: false, manageChannels: false, manageMembers: false,
+    createInvites: true, sendMessages: true, manageMessages: false, pinMessages: true,
+    kickMembers: false, banMembers: false, timeoutMembers: false,
+  });
+
+  return { ownerRole, modRole, memberRole };
+}
+
+/** Assign a membership to the appropriate roles based on its role string */
+async function assignMembershipRoles(membershipId: string, communityId: string, roleStr: string) {
+  // Always assign the @everyone role
+  const [everyoneRole] = await db.select().from(schema.roles)
+    .where(and(eq(schema.roles.communityId, communityId), eq(schema.roles.isEveryone, true)))
+    .limit(1);
+  if (everyoneRole) {
+    await db.insert(schema.userRoles).values({ membershipId, roleId: everyoneRole.id }).onConflictDoNothing();
+  }
+
+  // Assign the specific role if not just "member"
+  if (roleStr === "owner") {
+    const [ownerRole] = await db.select().from(schema.roles)
+      .where(and(eq(schema.roles.communityId, communityId), eq(schema.roles.name, "Owner"), eq(schema.roles.position, 0)))
+      .limit(1);
+    if (ownerRole) {
+      await db.insert(schema.userRoles).values({ membershipId, roleId: ownerRole.id }).onConflictDoNothing();
+    }
+  }
+}
+
+export async function authRoutes(app: FastifyInstance) {
+  app.get("/api/auth/status", async () => {
+    const [community] = await db.select().from(schema.communities).limit(1);
+    return { bootstrapped: !!community };
+  });
+
+  app.post("/api/auth/bootstrap", async (request, reply) => {
+    const [existing] = await db.select().from(schema.communities).limit(1);
+    if (existing) {
+      return reply.code(400).send({ error: "Already bootstrapped" });
+    }
+    const data = bootstrapSchema.parse(request.body);
+    const passwordHash = await hash(data.password);
+    const recoveryKey = generateRecoveryKey();
+    const recoveryKeyHash = await hash(recoveryKey);
+
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: data.email, username: data.username, passwordHash, recoveryKeyHash })
+      .returning();
+
+    const [community] = await db
+      .insert(schema.communities)
+      .values({ name: data.communityName })
+      .returning();
+
+    const [ownerMembership] = await db.insert(schema.memberships).values({
+      userId: user.id,
+      communityId: community.id,
+      role: "owner",
+    }).returning();
+
+    // Create default roles and assign owner
+    await createDefaultRoles(community.id);
+    await assignMembershipRoles(ownerMembership.id, community.id, "owner");
+
+    // Create default channels
+    const defaultChannels = ["announcements", "general", "events", "buy-sell"];
+    for (const name of defaultChannels) {
+      await db.insert(schema.channels).values({ communityId: community.id, name });
+    }
+
+    const token = await createToken(user.id);
+    setAuthCookie(reply, token);
+    return { user: { id: user.id, email: user.email, username: user.username }, community, recoveryKey };
+  });
+
+  app.post("/api/auth/signup", async (request, reply) => {
+    const data = signupSchema.parse(request.body);
+
+    // Validate invite code BEFORE creating the user
+    const [invite] = await db
+      .select()
+      .from(schema.invites)
+      .where(eq(schema.invites.code, data.inviteCode))
+      .limit(1);
+
+    if (!invite) {
+      return reply.code(400).send({ error: "Invalid invite code" });
+    }
+    if (invite.expiresAt && new Date(invite.expiresAt) < new Date()) {
+      return reply.code(410).send({ error: "Invite has expired" });
+    }
+    if (invite.maxUses > 0 && invite.uses >= invite.maxUses) {
+      return reply.code(410).send({ error: "Invite has reached max uses" });
+    }
+
+    const passwordHash = await hash(data.password);
+    const recoveryKey = generateRecoveryKey();
+    const recoveryKeyHash = await hash(recoveryKey);
+
+    const [existingEmail] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, data.email))
+      .limit(1);
+    if (existingEmail) {
+      return reply.code(409).send({ error: "Email already registered" });
+    }
+
+    const [existingUsername] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.username, data.username))
+      .limit(1);
+    if (existingUsername) {
+      return reply.code(409).send({ error: "Username already taken" });
+    }
+
+    // Create user and membership atomically
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: data.email, username: data.username, passwordHash, recoveryKeyHash })
+      .returning();
+
+    const [newMembership] = await db.insert(schema.memberships).values({
+      userId: user.id,
+      communityId: invite.communityId,
+      role: "member",
+    }).returning();
+
+    // Assign default (@everyone) role
+    await assignMembershipRoles(newMembership.id, invite.communityId, "member");
+
+    await db
+      .update(schema.invites)
+      .set({ uses: invite.uses + 1 })
+      .where(eq(schema.invites.id, invite.id));
+
+    const token = await createToken(user.id);
+    setAuthCookie(reply, token);
+    return { user: { id: user.id, email: user.email, username: user.username }, recoveryKey };
+  });
+
+  app.post("/api/auth/login", async (request, reply) => {
+    const data = loginSchema.parse(request.body);
+    const [user] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, data.email))
+      .limit(1);
+
+    if (!user || !(await verify(user.passwordHash, data.password))) {
+      return reply.code(401).send({ error: "Invalid email or password" });
+    }
+
+    const token = await createToken(user.id, user.tokenVersion);
+    setAuthCookie(reply, token);
+    return { user: { id: user.id, email: user.email, username: user.username } };
+  });
+
+  app.post("/api/auth/logout", async (_request, reply) => {
+    clearAuthCookie(reply);
+    return { ok: true };
+  });
+
+  app.get("/api/auth/me", { preHandler: [authHook] }, async (request) => {
+    const req = request as AuthedRequest;
+    return { user: req.user };
+  });
+
+  // Reset password using recovery key (unauthenticated)
+  app.post("/api/auth/reset-password", async (request, reply) => {
+    const data = resetPasswordSchema.parse(request.body);
+
+    const [user] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.email, data.email))
+      .limit(1);
+
+    if (!user || !user.recoveryKeyHash) {
+      return reply.code(401).send({ error: "Invalid email or recovery key" });
+    }
+
+    const valid = await verify(user.recoveryKeyHash, data.recoveryKey);
+    if (!valid) {
+      return reply.code(401).send({ error: "Invalid email or recovery key" });
+    }
+
+    // Reset password and rotate recovery key
+    const passwordHash = await hash(data.newPassword);
+    const newRecoveryKey = generateRecoveryKey();
+    const recoveryKeyHash = await hash(newRecoveryKey);
+
+    await db
+      .update(schema.users)
+      .set({ passwordHash, recoveryKeyHash, tokenVersion: sql`token_version + 1` })
+      .where(eq(schema.users.id, user.id));
+
+    return { ok: true, recoveryKey: newRecoveryKey };
+  });
+
+  // Returns the session token for Socket.IO auth (cookie is HTTP-only so JS can't read it)
+  app.get("/api/auth/token", { preHandler: [authHook] }, async (request) => {
+    const token = request.cookies.session;
+    return { token };
+  });
+}

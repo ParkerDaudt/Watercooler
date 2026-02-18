@@ -1,0 +1,20 @@
+{
+  "name": "watercooler",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:api": "pnpm --filter @watercooler/api dev",
+    "dev:web": "pnpm --filter @watercooler/web dev",
+    "build": "pnpm -r build",
+    "db:generate": "pnpm --filter @watercooler/api db:generate",
+    "db:migrate": "pnpm --filter @watercooler/api db:migrate",
+    "db:seed": "pnpm --filter @watercooler/api db:seed",
+    "lint": "pnpm -r lint"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["argon2", "esbuild", "sharp"]
+  }
+}
