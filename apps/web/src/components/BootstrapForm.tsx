@@ -4,9 +4,10 @@ import { Copy, Check, KeyRound } from "lucide-react";
 
 interface Props {
   onBootstrap: (email: string, password: string, username: string, communityName: string) => Promise<{ recoveryKey?: string }>;
+  onFinish: () => void;
 }
 
-export function BootstrapForm({ onBootstrap }: Props) {
+export function BootstrapForm({ onBootstrap, onFinish }: Props) {
   const [form, setForm] = useState({ email: "", password: "", username: "", communityName: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -67,7 +68,7 @@ export function BootstrapForm({ onBootstrap }: Props) {
           </div>
 
           <button
-            onClick={() => setRecoveryKey(null)}
+            onClick={onFinish}
             className="w-full py-2 px-4 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg font-medium hover:opacity-90"
           >
             I've Saved My Key

@@ -16,11 +16,11 @@ export default function Home() {
   }
 
   if (auth.bootstrapped === false) {
-    return <BootstrapForm onBootstrap={auth.bootstrap} />;
+    return <BootstrapForm onBootstrap={auth.bootstrap} onFinish={auth.finishAuth} />;
   }
 
   if (!auth.user) {
-    return <AuthForm onLogin={auth.login} onSignup={auth.signup} onResetPassword={auth.resetPassword} />;
+    return <AuthForm onLogin={auth.login} onSignup={auth.signup} onResetPassword={auth.resetPassword} onFinishAuth={auth.finishAuth} />;
   }
 
   return <AppShell user={auth.user} onLogout={auth.logout} />;

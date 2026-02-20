@@ -158,7 +158,7 @@ export function AppShell({ user, onLogout }: Props) {
     });
 
     // Voice state tracking for sidebar
-    socket.on("voice_user_joined", ({ channelId, participant }) => {
+    const handleVoiceUserJoined = ({ channelId, participant }: { channelId: string; participant: VoiceParticipant }) => {
       setVoiceParticipantsMap((prev) => {
         const next = new Map(prev);
         const existing = next.get(channelId) || [];
@@ -167,9 +167,9 @@ export function AppShell({ user, onLogout }: Props) {
         }
         return next;
       });
-    });
+    };
 
-    socket.on("voice_user_left", ({ channelId, userId: leftUserId }) => {
+    const handleVoiceUserLeft = ({ channelId, userId: leftUserId }: { channelId: string; userId: string }) => {
       setVoiceParticipantsMap((prev) => {
         const next = new Map(prev);
         const existing = next.get(channelId) || [];
@@ -181,9 +181,9 @@ export function AppShell({ user, onLogout }: Props) {
         }
         return next;
       });
-    });
+    };
 
-    socket.on("voice_state_update", ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d }) => {
+    const handleVoiceStateUpdate = ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d }: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean }) => {
       setVoiceParticipantsMap((prev) => {
         const next = new Map(prev);
         const existing = next.get(channelId) || [];
@@ -192,7 +192,11 @@ export function AppShell({ user, onLogout }: Props) {
         ));
         return next;
       });
-    });
+    };
+
+    socket.on("voice_user_joined", handleVoiceUserJoined);
+    socket.on("voice_user_left", handleVoiceUserLeft);
+    socket.on("voice_state_update", handleVoiceStateUpdate);
 
     // Fetch initial online users and voice states once connected
     const onConnect = () => {
@@ -216,9 +220,9 @@ export function AppShell({ user, onLogout }: Props) {
 
     return () => {
       socket.off("connect", onConnect);
-      socket.off("voice_user_joined");
-      socket.off("voice_user_left");
-      socket.off("voice_state_update");
+      socket.off("voice_user_joined", handleVoiceUserJoined);
+      socket.off("voice_user_left", handleVoiceUserLeft);
+      socket.off("voice_state_update", handleVoiceStateUpdate);
       socket.disconnect();
     };
   }, [activeChannelId, refreshChannelUnreadCounts]);
@@ -348,7 +352,14 @@ export function AppShell({ user, onLogout }: Props) {
             channels={channels}
             categories={categories}
             activeChannelId={activeChannelId}
-            onSelect={(id) => { setActiveChannelId(id); setMobileSidebarOpen(false); }}
+            onSelect={(id) => {
+              // Auto-disconnect from voice when navigating to a different channel
+              if (voice.isConnected && voice.currentChannelId !== id) {
+                voice.leaveChannel();
+              }
+              setActiveChannelId(id);
+              setMobileSidebarOpen(false);
+            }}
             communityName={community?.name || ""}
             unreadCounts={channelUnreadCounts}
             onNewDmClick={() => setShowDmModal(true)}

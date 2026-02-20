@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "./api";
 import type { User } from "@watercooler/shared";
 
@@ -44,6 +44,8 @@ export function useAuth() {
     return user;
   };
 
+  const pendingUser = useRef<User | null>(null);
+
   const signup = async (email: string, password: string, username: string, inviteCode?: string) => {
     const result = await api.post<{ user: User; recoveryKey: string }>("/api/auth/signup", {
       email,
@@ -51,7 +53,8 @@ export function useAuth() {
       username,
       inviteCode,
     });
-    setState((s) => ({ ...s, user: result.user }));
+    // Don't set user yet — AuthForm needs to stay mounted to show the recovery key
+    pendingUser.current = result.user;
     return result;
   };
 
@@ -67,8 +70,17 @@ export function useAuth() {
       username,
       communityName,
     });
-    setState({ user: result.user, loading: false, bootstrapped: true });
+    // Don't set user yet — BootstrapForm needs to stay mounted to show the recovery key
+    pendingUser.current = result.user;
     return result;
+  };
+
+  const finishAuth = () => {
+    const user = pendingUser.current;
+    if (user) {
+      setState({ user, loading: false, bootstrapped: true });
+      pendingUser.current = null;
+    }
   };
 
   const resetPassword = async (email: string, recoveryKey: string, newPassword: string) => {
@@ -84,5 +96,5 @@ export function useAuth() {
     setState((s) => ({ ...s, user: null }));
   };
 
-  return { ...state, login, signup, bootstrap, logout, checkAuth, resetPassword };
+  return { ...state, login, signup, finishAuth, bootstrap, logout, checkAuth, resetPassword };
 }

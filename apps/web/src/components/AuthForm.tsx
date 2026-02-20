@@ -6,9 +6,10 @@ interface Props {
   onLogin: (email: string, password: string) => Promise<unknown>;
   onSignup: (email: string, password: string, username: string, inviteCode?: string) => Promise<{ recoveryKey: string }>;
   onResetPassword: (email: string, recoveryKey: string, newPassword: string) => Promise<{ recoveryKey: string }>;
+  onFinishAuth: () => void;
 }
 
-export function AuthForm({ onLogin, onSignup, onResetPassword }: Props) {
+export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: Props) {
   const [mode, setMode] = useState<"login" | "signup" | "reset">("login");
   const [form, setForm] = useState({ email: "", password: "", username: "", inviteCode: "", confirmPassword: "", recoveryKey: "" });
   const [error, setError] = useState("");
@@ -102,6 +103,8 @@ export function AuthForm({ onLogin, onSignup, onResetPassword }: Props) {
               if (mode === "reset") {
                 setMode("login");
                 setForm({ email: "", password: "", username: "", inviteCode: "", confirmPassword: "", recoveryKey: "" });
+              } else if (mode === "signup") {
+                onFinishAuth();
               }
             }}
             className="w-full py-2 px-4 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg font-medium hover:opacity-90"
