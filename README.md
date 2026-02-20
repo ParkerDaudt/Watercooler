@@ -1,6 +1,6 @@
 # Watercooler
 
-A self-hosted, real-time community chat platform built for local communities, organizations, and teams. Features text channels, direct messages, threads, events with RSVP, role-based moderation, and an invite system -- all deployable with a single `docker compose up`.
+A self-hosted, real-time community chat platform built for local communities, organizations, and teams. Features text and voice channels, direct messages, threads, events with RSVP, rich user profiles, role-based moderation, and an invite system -- all deployable with a single `docker compose up`.
 
 ## Tech Stack
 
@@ -37,10 +37,21 @@ A self-hosted, real-time community chat platform built for local communities, or
 - Unread message tracking per channel
 - Channel-level permission overrides per role
 
+### Voice Channels
+- WebRTC peer-to-peer mesh audio
+- Socket.IO-based signaling (offer/answer/ICE relay)
+- Mute, deafen, and disconnect controls
+- Voice channel participants visible in sidebar
+- Persistent voice status bar when connected
+- STUN server support for NAT traversal
+
 ### User Presence & Profiles
 - Online / away / do not disturb / invisible status
 - Custom status messages
-- User profiles with bio and avatar upload
+- User profiles with bio, avatar, banner image, and pronouns
+- Connected links (social accounts displayed on profile)
+- User badges with custom icons and colors
+- Personal notes on other users (private, per-viewer)
 - Member list with roles and join dates
 
 ### Events
@@ -319,6 +330,8 @@ watercooler/
 │       │   │   ├── ChatPanel.tsx    # Message list and input
 │       │   │   ├── MessageBubble.tsx# Message rendering with reactions
 │       │   │   ├── ChannelSidebar.tsx
+│       │   │   ├── VoiceChannel.tsx # Voice channel view with controls
+│       │   │   ├── VoiceStatusBar.tsx # Persistent voice status in sidebar
 │       │   │   ├── EventsPanel.tsx  # Events display and RSVP
 │       │   │   ├── AdminPanel.tsx   # Moderation dashboard
 │       │   │   ├── ThreadPanel.tsx  # Thread view
@@ -327,6 +340,8 @@ watercooler/
 │       │   │   ├── UserSettingsModal.tsx
 │       │   │   ├── ServerSettingsModal.tsx
 │       │   │   └── ...
+│       │   ├── hooks/
+│       │   │   └── useVoice.ts     # WebRTC + signaling hook
 │       │   └── lib/
 │       │       ├── api.ts          # HTTP API client
 │       │       ├── socket.ts       # Socket.IO client
@@ -402,10 +417,14 @@ watercooler/
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/users/:id/profile` | Get user profile |
-| PATCH | `/api/users/me` | Update profile (username, bio, email) |
+| GET | `/api/users/:id/profile` | Get user profile (bio, badges, activity stats) |
+| PATCH | `/api/users/me` | Update profile (username, bio, email, pronouns) |
 | POST | `/api/users/me/password` | Change password |
 | POST | `/api/users/me/avatar` | Upload avatar |
+| POST | `/api/users/me/banner` | Upload profile banner image |
+| PUT | `/api/users/:id/note` | Set personal note on a user |
+| DELETE | `/api/users/:id/note` | Remove personal note |
+| GET | `/api/users/search` | Search users by username |
 
 ### Events
 
@@ -497,6 +516,15 @@ watercooler/
 | `presence_update` | Server -> Client | User came online/offline |
 | `user_banned` / `user_timeout` | Server -> Client | Moderation action |
 | `notification` | Server -> Client | New notification |
+| `voice_join` | Client -> Server | Join a voice channel |
+| `voice_leave` | Client -> Server | Leave current voice channel |
+| `voice_offer` | Client -> Server | Send WebRTC offer to a peer |
+| `voice_answer` | Client -> Server | Send WebRTC answer to a peer |
+| `voice_ice_candidate` | Client -> Server | Relay ICE candidate to a peer |
+| `voice_state_update` | Bidirectional | Update/broadcast mute/deafen state |
+| `get_voice_states` | Client -> Server | Fetch all voice channel participants |
+| `voice_user_joined` | Server -> Client | User joined a voice channel |
+| `voice_user_left` | Server -> Client | User left a voice channel |
 
 ---
 
