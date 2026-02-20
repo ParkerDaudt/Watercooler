@@ -102,8 +102,9 @@ export async function channelRoutes(app: FastifyInstance) {
         .values({
           communityId: req.communityId,
           name: data.name,
+          type: data.type,
           isPrivate: data.isPrivate,
-          isAnnouncement: data.isAnnouncement ?? false,
+          isAnnouncement: data.type === "voice" ? false : (data.isAnnouncement ?? false),
         })
         .returning();
 

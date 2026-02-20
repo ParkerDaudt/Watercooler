@@ -25,6 +25,28 @@ async function seed() {
     }
   }
 
+  // Seed default badges
+  const defaultBadges = [
+    { name: "Early Member", description: "Joined within the first month", icon: "star", color: "#f59e0b" },
+    { name: "Top Contributor", description: "Sent over 1000 messages", icon: "trophy", color: "#10b981" },
+    { name: "Event Organizer", description: "Created 5+ events", icon: "calendar", color: "#6366f1" },
+    { name: "Helper", description: "Recognized for helping others", icon: "heart", color: "#ec4899" },
+    { name: "Moderator", description: "Community moderator", icon: "shield", color: "#3b82f6" },
+  ];
+  for (const badge of defaultBadges) {
+    const [existing] = await db
+      .select()
+      .from(schema.badges)
+      .where(eq(schema.badges.name, badge.name))
+      .limit(1);
+    if (!existing) {
+      await db.insert(schema.badges).values(badge);
+      console.log(`Created badge: ${badge.name}`);
+    } else {
+      console.log(`Badge "${badge.name}" already exists`);
+    }
+  }
+
   console.log("Seed complete.");
   process.exit(0);
 }

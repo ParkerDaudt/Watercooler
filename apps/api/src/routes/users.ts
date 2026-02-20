@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { eq, and, ilike, sql } from "drizzle-orm";
+import { eq, and, ilike, sql, desc, inArray } from "drizzle-orm";
 import { hash, verify } from "argon2";
 import { db, schema } from "../db/index.js";
-import { updateUserProfileSchema, changePasswordSchema, updateStatusSchema } from "@watercooler/shared";
+import { updateUserProfileSchema, changePasswordSchema, updateStatusSchema, userNoteSchema } from "@watercooler/shared";
 import {
   authHook,
   communityHook,
@@ -49,6 +49,9 @@ export async function userRoutes(app: FastifyInstance) {
         id: schema.users.id,
         username: schema.users.username,
         avatarUrl: schema.users.avatarUrl,
+        bannerUrl: schema.users.bannerUrl,
+        pronouns: schema.users.pronouns,
+        connectedLinks: schema.users.connectedLinks,
         bio: schema.users.bio,
         status: schema.users.status,
         customStatus: schema.users.customStatus,
@@ -62,6 +65,7 @@ export async function userRoutes(app: FastifyInstance) {
 
     const [membership] = await db
       .select({
+        id: schema.memberships.id,
         role: schema.memberships.role,
         joinedAt: schema.memberships.joinedAt,
       })
@@ -77,31 +81,92 @@ export async function userRoutes(app: FastifyInstance) {
     // Fetch custom roles if member
     let userRoles: Array<{ id: string; name: string; color: string }> = [];
     if (membership) {
-      const [mem] = await db
-        .select({ id: schema.memberships.id })
-        .from(schema.memberships)
-        .where(
-          and(
-            eq(schema.memberships.userId, userId),
-            eq(schema.memberships.communityId, req.communityId)
-          )
-        )
-        .limit(1);
-      if (mem) {
-        userRoles = await db
-          .select({
-            id: schema.roles.id,
-            name: schema.roles.name,
-            color: schema.roles.color,
-          })
-          .from(schema.userRoles)
-          .innerJoin(schema.roles, eq(schema.userRoles.roleId, schema.roles.id))
-          .where(eq(schema.userRoles.membershipId, mem.id));
+      userRoles = await db
+        .select({
+          id: schema.roles.id,
+          name: schema.roles.name,
+          color: schema.roles.color,
+        })
+        .from(schema.userRoles)
+        .innerJoin(schema.roles, eq(schema.userRoles.roleId, schema.roles.id))
+        .where(eq(schema.userRoles.membershipId, membership.id));
+    }
+
+    // Parallel fetches for badges, activity stats, mutual channels, note
+    const isOwnProfile = userId === req.user.id;
+
+    const [userBadgesList, msgCountResult, lastMessage, noteResult, myChannelIds, theirChannelIds] = await Promise.all([
+      // Badges
+      db.select({
+        id: schema.badges.id,
+        name: schema.badges.name,
+        description: schema.badges.description,
+        icon: schema.badges.icon,
+        color: schema.badges.color,
+      }).from(schema.userBadges)
+        .innerJoin(schema.badges, eq(schema.userBadges.badgeId, schema.badges.id))
+        .where(eq(schema.userBadges.userId, userId)),
+
+      // Message count
+      db.select({ count: sql<number>`count(*)::int` })
+        .from(schema.messages)
+        .where(eq(schema.messages.userId, userId)),
+
+      // Last message
+      db.select({ createdAt: schema.messages.createdAt })
+        .from(schema.messages)
+        .where(eq(schema.messages.userId, userId))
+        .orderBy(desc(schema.messages.createdAt))
+        .limit(1),
+
+      // Note (only for other users)
+      isOwnProfile
+        ? Promise.resolve([])
+        : db.select({ content: schema.userNotes.content, updatedAt: schema.userNotes.updatedAt })
+            .from(schema.userNotes)
+            .where(and(eq(schema.userNotes.authorId, req.user.id), eq(schema.userNotes.targetUserId, userId)))
+            .limit(1),
+
+      // My private channel memberships
+      isOwnProfile
+        ? Promise.resolve([])
+        : db.select({ channelId: schema.channelMembers.channelId })
+            .from(schema.channelMembers)
+            .where(eq(schema.channelMembers.userId, req.user.id)),
+
+      // Their private channel memberships
+      isOwnProfile
+        ? Promise.resolve([])
+        : db.select({ channelId: schema.channelMembers.channelId })
+            .from(schema.channelMembers)
+            .where(eq(schema.channelMembers.userId, userId)),
+    ]);
+
+    const activityStats = {
+      messageCount: msgCountResult[0]?.count ?? 0,
+      lastActiveAt: lastMessage[0]?.createdAt?.toISOString() ?? null,
+    };
+
+    // Mutual private channels
+    let mutualChannels: Array<{ id: string; name: string; type: string }> = [];
+    if (!isOwnProfile) {
+      const mySet = new Set(myChannelIds.map((c) => c.channelId));
+      const sharedIds = theirChannelIds.map((c) => c.channelId).filter((id) => mySet.has(id));
+      if (sharedIds.length > 0) {
+        mutualChannels = await db
+          .select({ id: schema.channels.id, name: schema.channels.name, type: schema.channels.type })
+          .from(schema.channels)
+          .where(and(inArray(schema.channels.id, sharedIds), eq(schema.channels.type, "channel")));
       }
     }
 
+    const note = noteResult[0]
+      ? { content: noteResult[0].content, updatedAt: noteResult[0].updatedAt.toISOString() }
+      : null;
+
     return {
       ...user,
+      connectedLinks: user.connectedLinks ?? {},
       createdAt: user.createdAt.toISOString(),
       membership: membership
         ? {
@@ -110,6 +175,10 @@ export async function userRoutes(app: FastifyInstance) {
             roles: userRoles,
           }
         : null,
+      badges: userBadgesList,
+      activityStats,
+      mutualChannels,
+      note,
     };
   });
 
@@ -142,10 +211,12 @@ export async function userRoutes(app: FastifyInstance) {
       }
     }
 
-    const updates: Record<string, string> = {};
+    const updates: Record<string, unknown> = {};
     if (data.username !== undefined) updates.username = data.username;
     if (data.bio !== undefined) updates.bio = data.bio;
     if (data.email !== undefined) updates.email = data.email;
+    if (data.pronouns !== undefined) updates.pronouns = data.pronouns;
+    if (data.connectedLinks !== undefined) updates.connectedLinks = data.connectedLinks;
 
     if (Object.keys(updates).length === 0) {
       return reply.code(400).send({ error: "No fields to update" });
@@ -160,6 +231,9 @@ export async function userRoutes(app: FastifyInstance) {
         username: schema.users.username,
         email: schema.users.email,
         bio: schema.users.bio,
+        pronouns: schema.users.pronouns,
+        connectedLinks: schema.users.connectedLinks,
+        bannerUrl: schema.users.bannerUrl,
         createdAt: schema.users.createdAt,
       });
 
@@ -258,6 +332,82 @@ export async function userRoutes(app: FastifyInstance) {
       .where(eq(schema.users.id, req.user.id));
 
     return { avatarUrl };
+  });
+
+  // Upload banner
+  app.post("/api/users/me/banner", { preHandler }, async (request, reply) => {
+    const req = request as AuthedRequest;
+    const data = await request.file();
+    if (!data) return reply.code(400).send({ error: "No file provided" });
+
+    const allowedMimes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+    if (!allowedMimes.includes(data.mimetype)) {
+      return reply.code(400).send({ error: "Only image files allowed" });
+    }
+
+    const buffer = await data.toBuffer();
+    const maxBytes = 4 * 1024 * 1024;
+    if (buffer.length > maxBytes) {
+      return reply.code(413).send({ error: "Banner must be under 4MB" });
+    }
+
+    const detectedMime = detectImageMime(buffer);
+    if (!detectedMime || !allowedMimes.includes(detectedMime)) {
+      return reply.code(400).send({ error: "File content does not match an allowed image type" });
+    }
+
+    const fileId = randomUUID();
+    const ext = extname(data.filename).replace(/[^a-zA-Z0-9.]/g, "") || ".png";
+    const filename = `${fileId}${ext}`;
+    const bannerDir = join(env.UPLOAD_DIR, "banners");
+    await mkdir(bannerDir, { recursive: true });
+    await writeFile(join(bannerDir, filename), buffer);
+
+    const bannerUrl = `/uploads/banners/${filename}`;
+    await db.update(schema.users).set({ bannerUrl }).where(eq(schema.users.id, req.user.id));
+
+    return { bannerUrl };
+  });
+
+  // Upsert private note about a user
+  app.put("/api/users/:userId/note", { preHandler }, async (request, reply) => {
+    const req = request as AuthedRequest;
+    const { userId } = request.params as { userId: string };
+    const { content } = userNoteSchema.parse(request.body);
+
+    if (userId === req.user.id) {
+      return reply.code(400).send({ error: "Cannot write a note about yourself" });
+    }
+
+    const [target] = await db
+      .select({ id: schema.users.id })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    if (!target) return reply.code(404).send({ error: "User not found" });
+
+    const [note] = await db
+      .insert(schema.userNotes)
+      .values({ authorId: req.user.id, targetUserId: userId, content })
+      .onConflictDoUpdate({
+        target: [schema.userNotes.authorId, schema.userNotes.targetUserId],
+        set: { content, updatedAt: new Date() },
+      })
+      .returning();
+
+    return { content: note.content, updatedAt: note.updatedAt.toISOString() };
+  });
+
+  // Delete private note about a user
+  app.delete("/api/users/:userId/note", { preHandler }, async (request) => {
+    const req = request as AuthedRequest;
+    const { userId } = request.params as { userId: string };
+
+    await db
+      .delete(schema.userNotes)
+      .where(and(eq(schema.userNotes.authorId, req.user.id), eq(schema.userNotes.targetUserId, userId)));
+
+    return { ok: true };
   });
 
   // Search users for mentions

@@ -110,7 +110,12 @@ export async function authRoutes(app: FastifyInstance) {
     if (existing) {
       return reply.code(400).send({ error: "Already bootstrapped" });
     }
-    const data = bootstrapSchema.parse(request.body);
+    const parsed = bootstrapSchema.safeParse(request.body);
+    if (!parsed.success) {
+      const messages = parsed.error.errors.map(e => e.message).join(". ");
+      return reply.code(400).send({ error: messages, details: parsed.error.errors });
+    }
+    const data = parsed.data;
     const passwordHash = await hash(data.password);
     const recoveryKey = generateRecoveryKey();
     const recoveryKeyHash = await hash(recoveryKey);
@@ -147,7 +152,12 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/auth/signup", async (request, reply) => {
-    const data = signupSchema.parse(request.body);
+    const parsed = signupSchema.safeParse(request.body);
+    if (!parsed.success) {
+      const messages = parsed.error.errors.map(e => e.message).join(". ");
+      return reply.code(400).send({ error: messages, details: parsed.error.errors });
+    }
+    const data = parsed.data;
 
     // Validate invite code BEFORE creating the user
     const [invite] = await db
@@ -210,7 +220,12 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   app.post("/api/auth/login", async (request, reply) => {
-    const data = loginSchema.parse(request.body);
+    const parsed = loginSchema.safeParse(request.body);
+    if (!parsed.success) {
+      const messages = parsed.error.errors.map(e => e.message).join(". ");
+      return reply.code(400).send({ error: messages, details: parsed.error.errors });
+    }
+    const data = parsed.data;
 
     // Check per-account lockout
     const lockout = checkAccountLockout(data.email);
@@ -249,7 +264,12 @@ export async function authRoutes(app: FastifyInstance) {
 
   // Reset password using recovery key (unauthenticated)
   app.post("/api/auth/reset-password", async (request, reply) => {
-    const data = resetPasswordSchema.parse(request.body);
+    const parsed = resetPasswordSchema.safeParse(request.body);
+    if (!parsed.success) {
+      const messages = parsed.error.errors.map(e => e.message).join(". ");
+      return reply.code(400).send({ error: messages, details: parsed.error.errors });
+    }
+    const data = parsed.data;
 
     const [user] = await db
       .select()

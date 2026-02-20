@@ -46,10 +46,22 @@ export const updateUserBioSchema = z.object({
   bio: z.string().max(500).optional(),
 });
 
+export const connectedLinksSchema = z.object({
+  github: z.string().url().max(200).nullable().optional(),
+  twitter: z.string().url().max(200).nullable().optional(),
+  website: z.string().url().max(200).nullable().optional(),
+});
+
 export const updateUserProfileSchema = z.object({
   username: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/, "Only letters, numbers, underscores, hyphens").optional(),
   bio: z.string().max(500).optional(),
   email: z.string().email().max(255).optional(),
+  pronouns: z.string().max(50).optional(),
+  connectedLinks: connectedLinksSchema.optional(),
+});
+
+export const userNoteSchema = z.object({
+  content: z.string().max(1000),
 });
 
 export const changePasswordSchema = z.object({
@@ -70,6 +82,7 @@ export const createChannelSchema = z.object({
     .min(1)
     .max(64)
     .regex(/^[a-z0-9-]+$/, "Lowercase letters, numbers, hyphens only"),
+  type: z.enum(["channel", "voice"]).default("channel"),
   isPrivate: z.boolean().default(false),
   isAnnouncement: z.boolean().default(false),
 });

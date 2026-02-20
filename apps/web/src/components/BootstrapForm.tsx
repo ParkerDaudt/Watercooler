@@ -127,7 +127,7 @@ export function BootstrapForm({ onBootstrap }: Props) {
               value={form.password}
               onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
               className="w-full px-3 py-2 rounded-lg bg-[var(--muted)] border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-              placeholder="Min 8 characters"
+              placeholder="Min 8 chars, uppercase + digit required"
             />
           </div>
           {error && <p className="text-[var(--destructive)] text-sm">{error}</p>}

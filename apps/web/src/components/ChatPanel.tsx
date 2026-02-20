@@ -50,6 +50,7 @@ export function ChatPanel({ channelId, channelName, user, isMod, isDm, isAnnounc
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<Array<{ url: string; filename: string; mime: string; size: number }>>([]);
 
   const insertMention = useCallback((mentionUser: { id: string; username: string }) => {
     const cursorPos = textareaRef.current?.selectionStart ?? 0;
@@ -91,6 +92,7 @@ export function ChatPanel({ channelId, channelName, user, isMod, isDm, isAnnounc
     setTypingUsers(new Map());
     setShowPins(false);
     setThreadMessageId(null);
+    setPendingAttachments([]);
     loadMessages();
 
     // Mark channel as read when entering
@@ -227,18 +229,19 @@ export function ChatPanel({ channelId, channelName, user, isMod, isDm, isAnnounc
 
   const sendMessage = useCallback(() => {
     const text = input.trim();
-    if (!text) return;
+    if (!text && pendingAttachments.length === 0) return;
     const socket = getSocket();
     socket.emit(
       "send_message",
-      { channelId, content: text, replyToId: replyTo?.id },
+      { channelId, content: text || "", replyToId: replyTo?.id, attachments: pendingAttachments.length > 0 ? pendingAttachments : undefined },
       (res) => {
         if (!res.ok) console.error("Send failed:", res.error);
       }
     );
     setInput("");
     setReplyTo(null);
-  }, [input, channelId, replyTo]);
+    setPendingAttachments([]);
+  }, [input, channelId, replyTo, pendingAttachments]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (showMentions && mentionUsers.length > 0) {
@@ -330,6 +333,11 @@ export function ChatPanel({ channelId, channelName, user, isMod, isDm, isAnnounc
         } catch {
           alert("Upload failed");
         }
+      } else {
+        try {
+          const result = JSON.parse(xhr.responseText);
+          setPendingAttachments((prev) => [...prev, result]);
+        } catch { /* ignore */ }
       }
     };
 
@@ -564,6 +572,29 @@ export function ChatPanel({ channelId, channelName, user, isMod, isDm, isAnnounc
               </div>
               <span className="text-xs text-[var(--muted-foreground)] w-8">{uploadProgress}%</span>
             </div>
+          </div>
+        )}
+
+        {/* Pending attachments preview */}
+        {pendingAttachments.length > 0 && (
+          <div className="px-4 py-2 border-t border-[var(--border)] flex flex-wrap gap-2">
+            {pendingAttachments.map((att, i) => (
+              <div key={i} className="relative group">
+                {att.mime.startsWith("image/") ? (
+                  <img src={att.url} alt={att.filename} className="h-20 rounded-lg border border-[var(--border)] object-cover" />
+                ) : (
+                  <div className="h-20 px-4 flex items-center rounded-lg border border-[var(--border)] bg-[var(--muted)] text-xs text-[var(--muted-foreground)]">
+                    {att.filename}
+                  </div>
+                )}
+                <button
+                  onClick={() => setPendingAttachments((prev) => prev.filter((_, j) => j !== i))}
+                  className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 

@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import type { Warning } from "@watercooler/shared";
-import { Shield, Users, Link2, Flag, ClipboardList, Plus, X, Hash, Image, Palette, FolderOpen, Pencil, Trash2, AlertTriangle, History } from "lucide-react";
+import { Shield, Users, Link2, Flag, ClipboardList, Plus, X, Hash, Image, Palette, FolderOpen, Pencil, Trash2, AlertTriangle, History, Volume2 } from "lucide-react";
 
 type Tab = "members" | "invites" | "reports" | "audit" | "channels" | "categories" | "settings";
 
@@ -566,6 +566,7 @@ function AuditTab() {
 function ChannelsTab() {
   const [channels, setChannels] = useState<any[]>([]);
   const [name, setName] = useState("");
+  const [channelType, setChannelType] = useState<"channel" | "voice">("channel");
   const [isPrivate, setIsPrivate] = useState(false);
   const [isAnnouncement, setIsAnnouncement] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -581,8 +582,9 @@ function ChannelsTab() {
     }
     setCreating(true);
     try {
-      await api.post("/api/channels", { name: trimmed, isPrivate, isAnnouncement });
+      await api.post("/api/channels", { name: trimmed, type: channelType, isPrivate, isAnnouncement: channelType === "voice" ? false : isAnnouncement });
       setName("");
+      setChannelType("channel");
       setIsPrivate(false);
       setIsAnnouncement(false);
       load();
@@ -609,14 +611,27 @@ function ChannelsTab() {
               className="px-3 py-2 bg-[var(--muted)] rounded-lg text-sm w-32 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
             />
           </div>
+          <div>
+            <label className="block text-xs text-[var(--muted-foreground)] mb-1">Type</label>
+            <select
+              value={channelType}
+              onChange={(e) => setChannelType(e.target.value as "channel" | "voice")}
+              className="px-3 py-2 bg-[var(--muted)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+            >
+              <option value="channel">Text</option>
+              <option value="voice">Voice</option>
+            </select>
+          </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={isPrivate} onChange={(e) => setIsPrivate(e.target.checked)} />
             Private
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={isAnnouncement} onChange={(e) => setIsAnnouncement(e.target.checked)} />
-            Announcement (read-only)
-          </label>
+          {channelType !== "voice" && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={isAnnouncement} onChange={(e) => setIsAnnouncement(e.target.checked)} />
+              Announcement (read-only)
+            </label>
+          )}
           <button
             onClick={create}
             disabled={creating || !name.trim()}
@@ -635,8 +650,9 @@ function ChannelsTab() {
               key={ch.id}
               className="flex items-center gap-2 p-2 bg-[var(--card)] border border-[var(--border)] rounded-lg"
             >
-              <Hash size={14} className="text-[var(--muted-foreground)]" />
+              {ch.type === "voice" ? <Volume2 size={14} className="text-[var(--muted-foreground)]" /> : <Hash size={14} className="text-[var(--muted-foreground)]" />}
               <span className="font-medium">#{ch.name}</span>
+              {ch.type === "voice" && <span className="text-xs bg-green-500/20 text-green-600 px-1.5 py-0.5 rounded">Voice</span>}
               {ch.isPrivate && <span className="text-xs bg-[var(--muted)] px-1.5 py-0.5 rounded">Private</span>}
               {ch.isAnnouncement && <span className="text-xs bg-amber-500/20 text-amber-600 px-1.5 py-0.5 rounded">Read-only</span>}
             </div>

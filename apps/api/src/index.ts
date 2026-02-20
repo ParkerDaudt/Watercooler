@@ -25,17 +25,24 @@ import { ZodError } from "zod";
 import { join, resolve, extname } from "path";
 import { readFileSync, existsSync } from "fs";
 
+// In development, accept both localhost and 127.0.0.1
+const allowedOrigins = [env.CORS_ORIGIN];
+if (env.NODE_ENV === "development") {
+  const alt = env.CORS_ORIGIN.replace("localhost", "127.0.0.1");
+  if (alt !== env.CORS_ORIGIN) allowedOrigins.push(alt);
+}
+
 const app = Fastify({
   logger: true,
   serverFactory: (handler) => {
     const server = createServer(handler);
-    setupSocketIO(server, env.CORS_ORIGIN);
+    setupSocketIO(server, allowedOrigins);
     return server;
   },
 });
 
 await app.register(cors, {
-  origin: env.CORS_ORIGIN,
+  origin: allowedOrigins,
   credentials: true,
 });
 await app.register(cookie);
@@ -54,7 +61,7 @@ app.addHook("onRequest", async (request, reply) => {
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") return;
 
   const origin = request.headers.origin;
-  if (origin && origin !== env.CORS_ORIGIN) {
+  if (origin && !allowedOrigins.includes(origin)) {
     reply.code(403).send({ error: "Invalid origin" });
   }
 });
@@ -65,7 +72,7 @@ app.addHook("onSend", async (_request, reply) => {
   reply.header("X-Frame-Options", "DENY");
   reply.header("X-XSS-Protection", "0"); // modern browsers use CSP instead
   reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-  reply.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  reply.header("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
   reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'");
   if (env.NODE_ENV === "production") {
     reply.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -76,7 +83,7 @@ app.addHook("onSend", async (_request, reply) => {
 await app.register(
   async (instance) => {
     await instance.register(rateLimit, {
-      max: 5,
+      max: env.NODE_ENV === "development" ? 30 : 5,
       timeWindow: "1 minute",
     });
     await authRoutes(instance);
@@ -85,21 +92,22 @@ await app.register(
 );
 
 // Zod error handler
-app.setErrorHandler((error, _request, reply) => {
+app.setErrorHandler((error: unknown, _request, reply) => {
   if (error instanceof ZodError) {
     return reply.code(400).send({
       error: "Validation error",
       details: error.errors,
     });
   }
-  if (error.statusCode === 429) {
+  const fastifyError = error as { statusCode?: number; message?: string };
+  if (fastifyError.statusCode === 429) {
     return reply.code(429).send({ error: "Too many requests" });
   }
   app.log.error(error);
-  const status = error.statusCode ?? 500;
+  const status = fastifyError.statusCode ?? 500;
   const message = status >= 500 && env.NODE_ENV === "production"
     ? "Internal server error"
-    : (error.message ?? "Internal server error");
+    : (fastifyError.message ?? "Internal server error");
   reply.code(status).send({ error: message });
 });
 

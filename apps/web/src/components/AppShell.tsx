@@ -2,9 +2,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@/lib/api";
 import { getSocket, connectSocket } from "@/lib/socket";
-import type { User, Channel, Community, ChannelCategory, UserStatus, Notification as Notif } from "@watercooler/shared";
+import type { User, Channel, Community, ChannelCategory, UserStatus, Notification as Notif, VoiceParticipant, VoiceChannelState } from "@watercooler/shared";
 import { ChannelSidebar } from "./ChannelSidebar";
 import { ChatPanel } from "./ChatPanel";
+import { VoiceChannel } from "./VoiceChannel";
+import { VoiceStatusBar } from "./VoiceStatusBar";
+import { useVoice } from "@/hooks/useVoice";
 import { DmUserPicker } from "./DmUserPicker";
 import { EventsPanel } from "./EventsPanel";
 import { AdminPanel } from "./AdminPanel";
@@ -46,6 +49,10 @@ export function AppShell({ user, onLogout }: Props) {
   const [myStatus, setMyStatus] = useState<UserStatus>("online");
   const [myCustomStatus, setMyCustomStatus] = useState("");
   const [myPermissions, setMyPermissions] = useState<RolePermissions | null>(null);
+
+  // Voice state
+  const voice = useVoice(user.id);
+  const [voiceParticipantsMap, setVoiceParticipantsMap] = useState<Map<string, VoiceParticipant[]>>(new Map());
 
   const loadData = useCallback(async () => {
     try {
@@ -150,7 +157,44 @@ export function AppShell({ user, onLogout }: Props) {
       });
     });
 
-    // Fetch initial online users once connected
+    // Voice state tracking for sidebar
+    socket.on("voice_user_joined", ({ channelId, participant }) => {
+      setVoiceParticipantsMap((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(channelId) || [];
+        if (!existing.some((p) => p.userId === participant.userId)) {
+          next.set(channelId, [...existing, participant]);
+        }
+        return next;
+      });
+    });
+
+    socket.on("voice_user_left", ({ channelId, userId: leftUserId }) => {
+      setVoiceParticipantsMap((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(channelId) || [];
+        const filtered = existing.filter((p) => p.userId !== leftUserId);
+        if (filtered.length === 0) {
+          next.delete(channelId);
+        } else {
+          next.set(channelId, filtered);
+        }
+        return next;
+      });
+    });
+
+    socket.on("voice_state_update", ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d }) => {
+      setVoiceParticipantsMap((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(channelId) || [];
+        next.set(channelId, existing.map((p) =>
+          p.userId === updatedUserId ? { ...p, isMuted: m, isDeafened: d } : p
+        ));
+        return next;
+      });
+    });
+
+    // Fetch initial online users and voice states once connected
     const onConnect = () => {
       socket.emit("get_online_users", (users) => {
         const map = new Map<string, { status: string; customStatus: string }>();
@@ -159,12 +203,22 @@ export function AppShell({ user, onLogout }: Props) {
         }
         setOnlineUsers(map);
       });
+      socket.emit("get_voice_states", (states: VoiceChannelState[]) => {
+        const map = new Map<string, VoiceParticipant[]>();
+        for (const s of states) {
+          map.set(s.channelId, s.participants);
+        }
+        setVoiceParticipantsMap(map);
+      });
     };
     if (socket.connected) onConnect();
     else socket.on("connect", onConnect);
 
     return () => {
       socket.off("connect", onConnect);
+      socket.off("voice_user_joined");
+      socket.off("voice_user_left");
+      socket.off("voice_state_update");
       socket.disconnect();
     };
   }, [activeChannelId, refreshChannelUnreadCounts]);
@@ -301,6 +355,19 @@ export function AppShell({ user, onLogout }: Props) {
             onSettingsClick={canManageServer ? () => setShowServerSettings(true) : undefined}
             mobileOpen={mobileSidebarOpen}
             onMobileClose={() => setMobileSidebarOpen(false)}
+            voiceParticipants={voiceParticipantsMap}
+            voiceStatusBar={
+              voice.isConnected ? (
+                <VoiceStatusBar
+                  channelName={channels.find(c => c.id === voice.currentChannelId)?.name || ""}
+                  isMuted={voice.isMuted}
+                  isDeafened={voice.isDeafened}
+                  onToggleMute={voice.toggleMute}
+                  onToggleDeafen={voice.toggleDeafen}
+                  onDisconnect={voice.leaveChannel}
+                />
+              ) : undefined
+            }
           />
         </>
       )}
@@ -337,7 +404,27 @@ export function AppShell({ user, onLogout }: Props) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {view === "chat" && activeChannelId && (
+        {view === "chat" && activeChannelId && channels.find(c => c.id === activeChannelId)?.type === "voice" && (
+          <VoiceChannel
+            channelName={channels.find(c => c.id === activeChannelId)?.name || ""}
+            channelId={activeChannelId}
+            isConnected={voice.isConnected && voice.currentChannelId === activeChannelId}
+            participants={
+              voice.isConnected && voice.currentChannelId === activeChannelId
+                ? voice.participants
+                : voiceParticipantsMap.get(activeChannelId) || []
+            }
+            isMuted={voice.isMuted}
+            isDeafened={voice.isDeafened}
+            error={voice.error}
+            onJoin={() => voice.joinChannel(activeChannelId)}
+            onLeave={voice.leaveChannel}
+            onToggleMute={voice.toggleMute}
+            onToggleDeafen={voice.toggleDeafen}
+            onMenuClick={() => setMobileSidebarOpen(true)}
+          />
+        )}
+        {view === "chat" && activeChannelId && channels.find(c => c.id === activeChannelId)?.type !== "voice" && (
           <ChatPanel
             channelId={activeChannelId}
             channelName={channels.find((c) => c.id === activeChannelId)?.name || ""}
@@ -349,9 +436,9 @@ export function AppShell({ user, onLogout }: Props) {
             onNavigateChannel={setActiveChannelId}
             onlineUsers={onlineUsers}
             onMenuClick={() => setMobileSidebarOpen(true)}
-            onStartDm={async (userId) => {
+            onStartDm={async (dmUserId) => {
               try {
-                const channel = await api.post<Channel>("/api/dms", { userId });
+                const channel = await api.post<Channel>("/api/dms", { userId: dmUserId });
                 setChannels((prev) => prev.some((c) => c.id === channel.id) ? prev : [...prev, channel]);
                 setActiveChannelId(channel.id);
               } catch (err: any) {

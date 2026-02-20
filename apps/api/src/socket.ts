@@ -5,7 +5,7 @@ import { db, schema } from "./db/index.js";
 import { eq, and, sql } from "drizzle-orm";
 import { computeEffectivePermissions } from "./services/permissions.js";
 import { processLinkPreviews } from "./services/linkPreviews.js";
-import type { ServerToClientEvents, ClientToServerEvents, UserStatus } from "@watercooler/shared";
+import type { ServerToClientEvents, ClientToServerEvents, UserStatus, VoiceParticipant, VoiceChannelState } from "@watercooler/shared";
 
 /** Strip HTML/script tags from user content to prevent stored XSS. */
 function sanitizeContent(text: string): string {
@@ -41,6 +41,28 @@ let io: SocketIOServer<ClientToServerEvents, ServerToClientEvents>;
 // Track online users in memory: userId -> { status, customStatus }
 const onlineUsers = new Map<string, { status: UserStatus; customStatus: string }>();
 
+// Track voice channel participants: channelId -> Map<userId, VoiceParticipant>
+const voiceChannels = new Map<string, Map<string, VoiceParticipant>>();
+// Track which voice channel each user is in: userId -> channelId
+const userVoiceChannel = new Map<string, string>();
+
+function removeUserFromVoice(userId: string) {
+  const channelId = userVoiceChannel.get(userId);
+  if (!channelId) return;
+
+  userVoiceChannel.delete(userId);
+  const participants = voiceChannels.get(channelId);
+  if (participants) {
+    participants.delete(userId);
+    if (participants.size === 0) {
+      voiceChannels.delete(channelId);
+    }
+  }
+
+  // Broadcast to everyone so sidebars update
+  io.emit("voice_user_left", { channelId, userId });
+}
+
 export function getIO() {
   return io;
 }
@@ -49,7 +71,7 @@ export function getOnlineUsers() {
   return onlineUsers;
 }
 
-export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
+export function setupSocketIO(httpServer: HttpServer, corsOrigin: string | string[]) {
   io = new SocketIOServer<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: corsOrigin, credentials: true },
     path: "/socket.io",
@@ -117,6 +139,12 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
     }
 
     socket.on("disconnect", async () => {
+      // Clean up voice state
+      const voiceChannelId = userVoiceChannel.get(userId);
+      if (voiceChannelId) {
+        removeUserFromVoice(userId);
+      }
+
       // Check if user has any other connected sockets
       const sockets = await io.fetchSockets();
       const stillConnected = sockets.some(
@@ -188,10 +216,14 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
     // --- Send message ---
     socket.on("send_message", async (data, callback) => {
       try {
-        if (!data.content || data.content.length > 4000) {
+        const hasAttachments = data.attachments && data.attachments.length > 0;
+        if (!data.content && !hasAttachments) {
           return callback({ ok: false, error: "Invalid message" });
         }
-        data.content = sanitizeContent(data.content);
+        if (data.content && data.content.length > 4000) {
+          return callback({ ok: false, error: "Message too long" });
+        }
+        data.content = data.content ? sanitizeContent(data.content) : "";
 
         // Check membership and timeout
         const [community] = await db.select().from(schema.communities).limit(1);
@@ -233,6 +265,10 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
           .from(schema.channels)
           .where(eq(schema.channels.id, data.channelId))
           .limit(1);
+
+        if (channel?.type === "voice") {
+          return callback({ ok: false, error: "Cannot send messages to a voice channel" });
+        }
 
         if (
           channel?.type === "channel" &&
@@ -282,6 +318,24 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
           );
         }
 
+        // Save attachments if provided
+        const savedAttachments: Array<{ id: string; messageId: string; url: string; filename: string; mime: string; size: number }> = [];
+        if (data.attachments && data.attachments.length > 0) {
+          for (const att of data.attachments.slice(0, 10)) {
+            const [saved] = await db
+              .insert(schema.attachments)
+              .values({
+                messageId: message.id,
+                url: att.url,
+                filename: att.filename,
+                mime: att.mime,
+                size: att.size,
+              })
+              .returning();
+            savedAttachments.push(saved);
+          }
+        }
+
         const fullMessage = {
           id: message.id,
           channelId: message.channelId,
@@ -296,7 +350,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
           createdAt: message.createdAt.toISOString(),
           editedAt: null,
           user: { id: userId, username, avatarUrl },
-          attachments: [],
+          attachments: savedAttachments,
           reactions: [],
           linkPreviews: [],
         };
@@ -339,6 +393,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
               if ((s.data as SocketData).userId === mentioned.id) {
                 s.emit("notification", {
                   ...notif,
+                  type: notif.type as import("@watercooler/shared").NotificationType,
                   payload: notif.payload as Record<string, unknown>,
                   createdAt: notif.createdAt.toISOString(),
                   readAt: null,
@@ -512,6 +567,135 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string) {
       } catch {
         callback({ ok: false, error: "Failed to remove reaction" });
       }
+    });
+
+    // --- Voice: Join ---
+    socket.on("voice_join", async (channelId, callback) => {
+      try {
+        const [channel] = await db
+          .select({ id: schema.channels.id, type: schema.channels.type })
+          .from(schema.channels)
+          .where(eq(schema.channels.id, channelId))
+          .limit(1);
+
+        if (!channel) return callback({ ok: false, error: "Channel not found" });
+        if (channel.type !== "voice") return callback({ ok: false, error: "Not a voice channel" });
+
+        // Leave any existing voice channel first
+        const currentVoice = userVoiceChannel.get(userId);
+        if (currentVoice) {
+          socket.leave(`voice:${currentVoice}`);
+          removeUserFromVoice(userId);
+        }
+
+        // Join the voice room
+        socket.join(`voice:${channelId}`);
+
+        const participant: VoiceParticipant = {
+          userId,
+          username,
+          avatarUrl: avatarUrl || null,
+          isMuted: false,
+          isDeafened: false,
+        };
+
+        // Track state
+        if (!voiceChannels.has(channelId)) {
+          voiceChannels.set(channelId, new Map());
+        }
+        voiceChannels.get(channelId)!.set(userId, participant);
+        userVoiceChannel.set(userId, channelId);
+
+        // Get current participants for the joining user
+        const currentParticipants = Array.from(voiceChannels.get(channelId)!.values());
+
+        // Broadcast globally so all sidebars update
+        io.emit("voice_user_joined", { channelId, participant });
+
+        callback({ ok: true, participants: currentParticipants });
+      } catch {
+        callback({ ok: false, error: "Failed to join voice channel" });
+      }
+    });
+
+    // --- Voice: Leave ---
+    socket.on("voice_leave", (callback) => {
+      try {
+        const channelId = userVoiceChannel.get(userId);
+        if (channelId) {
+          socket.leave(`voice:${channelId}`);
+        }
+        removeUserFromVoice(userId);
+        callback({ ok: true });
+      } catch {
+        callback({ ok: false, error: "Failed to leave voice channel" });
+      }
+    });
+
+    // --- Voice: WebRTC Offer relay ---
+    socket.on("voice_offer", async (data) => {
+      const sockets = await io.fetchSockets();
+      for (const s of sockets) {
+        if ((s.data as SocketData).userId === data.to) {
+          s.emit("voice_offer", { from: userId, offer: data.offer });
+        }
+      }
+    });
+
+    // --- Voice: WebRTC Answer relay ---
+    socket.on("voice_answer", async (data) => {
+      const sockets = await io.fetchSockets();
+      for (const s of sockets) {
+        if ((s.data as SocketData).userId === data.to) {
+          s.emit("voice_answer", { from: userId, answer: data.answer });
+        }
+      }
+    });
+
+    // --- Voice: ICE Candidate relay ---
+    socket.on("voice_ice_candidate", async (data) => {
+      const sockets = await io.fetchSockets();
+      for (const s of sockets) {
+        if ((s.data as SocketData).userId === data.to) {
+          s.emit("voice_ice_candidate", { from: userId, candidate: data.candidate });
+        }
+      }
+    });
+
+    // --- Voice: State Update (mute/deafen) ---
+    socket.on("voice_state_update", (data, callback) => {
+      try {
+        const channelId = userVoiceChannel.get(userId);
+        if (!channelId) return callback({ ok: false, error: "Not in a voice channel" });
+
+        const participants = voiceChannels.get(channelId);
+        if (!participants) return callback({ ok: false, error: "Voice channel not found" });
+
+        const participant = participants.get(userId);
+        if (!participant) return callback({ ok: false, error: "Participant not found" });
+
+        participant.isMuted = data.isMuted;
+        participant.isDeafened = data.isDeafened;
+
+        // Broadcast globally for sidebar updates
+        io.emit("voice_state_update", { channelId, userId, isMuted: data.isMuted, isDeafened: data.isDeafened });
+
+        callback({ ok: true });
+      } catch {
+        callback({ ok: false, error: "Failed to update voice state" });
+      }
+    });
+
+    // --- Voice: Get all voice channel states (for sidebar on connect) ---
+    socket.on("get_voice_states", (callback) => {
+      const states: VoiceChannelState[] = [];
+      for (const [channelId, participants] of voiceChannels) {
+        states.push({
+          channelId,
+          participants: Array.from(participants.values()),
+        });
+      }
+      callback(states);
     });
   });
 

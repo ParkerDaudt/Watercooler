@@ -1,6 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { db, schema } from "../db/index.js";
 import { authHook, communityHook, requireNotTimedOut, verifyChannelAccess, type AuthedRequest } from "../auth.js";
 import { env } from "../env.js";
 import { randomUUID } from "crypto";
@@ -86,33 +84,12 @@ export async function uploadRoutes(app: FastifyInstance) {
     await mkdir(uploadDir, { recursive: true });
     await writeFile(join(uploadDir, filename), buffer);
 
-    // Create message with attachment
-    const [message] = await db
-      .insert(schema.messages)
-      .values({
-        channelId,
-        userId: req.user.id,
-        content: `[file: ${data.filename}]`,
-      })
-      .returning();
-
-    const [attachment] = await db
-      .insert(schema.attachments)
-      .values({
-        messageId: message.id,
-        url: `/uploads/${channelId}/${filename}`,
-        filename: data.filename,
-        mime: data.mimetype,
-        size: buffer.length,
-      })
-      .returning();
-
+    // Return file metadata — attachment record is created when the message is sent
     return {
-      ...message,
-      createdAt: message.createdAt.toISOString(),
-      editedAt: null,
-      user: { id: req.user.id, username: req.user.username, avatarUrl: req.user.avatarUrl },
-      attachments: [attachment],
+      url: `/uploads/${channelId}/${filename}`,
+      filename: data.filename,
+      mime: data.mimetype,
+      size: buffer.length,
     };
   });
 }

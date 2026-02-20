@@ -6,11 +6,70 @@ export type ReportStatus = "open" | "reviewed" | "dismissed";
 export type NotificationType = "mention" | "event_update" | "event_reminder";
 export type UserStatus = "online" | "away" | "dnd" | "invisible";
 
+// WebRTC signal types (Node-safe, no DOM dependency)
+export interface RTCSessionDescriptionLike {
+  type: "offer" | "answer" | "pranswer" | "rollback";
+  sdp?: string;
+}
+
+export interface RTCIceCandidateLike {
+  candidate?: string;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  usernameFragment?: string | null;
+}
+
+export interface VoiceParticipant {
+  userId: string;
+  username: string;
+  avatarUrl: string | null;
+  isMuted: boolean;
+  isDeafened: boolean;
+}
+
+export interface VoiceChannelState {
+  channelId: string;
+  participants: VoiceParticipant[];
+}
+
+export interface ConnectedLinks {
+  github?: string | null;
+  twitter?: string | null;
+  website?: string | null;
+}
+
+export interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+}
+
+export interface UserNote {
+  content: string;
+  updatedAt: string;
+}
+
+export interface ActivityStats {
+  messageCount: number;
+  lastActiveAt: string | null;
+}
+
+export interface MutualChannel {
+  id: string;
+  name: string;
+  type: string;
+}
+
 export interface User {
   id: string;
   email: string;
   username: string;
   avatarUrl?: string | null;
+  bannerUrl?: string | null;
+  pronouns?: string | null;
+  connectedLinks?: ConnectedLinks | null;
   bio?: string | null;
   status?: UserStatus;
   customStatus?: string | null;
@@ -23,6 +82,10 @@ export interface UserProfile extends User {
     joinedAt: string;
     roles?: Array<{ id: string; name: string; color: string }>;
   } | null;
+  badges?: Badge[];
+  activityStats?: ActivityStats;
+  mutualChannels?: MutualChannel[];
+  note?: UserNote | null;
 }
 
 export interface Community {
@@ -250,13 +313,20 @@ export interface ServerToClientEvents {
   category_created: (category: ChannelCategory) => void;
   category_updated: (category: ChannelCategory) => void;
   category_deleted: (data: { categoryId: string }) => void;
+  // Voice events
+  voice_user_joined: (data: { channelId: string; participant: VoiceParticipant }) => void;
+  voice_user_left: (data: { channelId: string; userId: string }) => void;
+  voice_state_update: (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean }) => void;
+  voice_offer: (data: { from: string; offer: RTCSessionDescriptionLike }) => void;
+  voice_answer: (data: { from: string; answer: RTCSessionDescriptionLike }) => void;
+  voice_ice_candidate: (data: { from: string; candidate: RTCIceCandidateLike }) => void;
 }
 
 export interface ClientToServerEvents {
   join_channel: (channelId: string) => void;
   leave_channel: (channelId: string) => void;
   send_message: (
-    data: { channelId: string; content: string; replyToId?: string },
+    data: { channelId: string; content: string; replyToId?: string; attachments?: { url: string; filename: string; mime: string; size: number }[] },
     callback: (response: { ok: boolean; message?: Message; error?: string }) => void
   ) => void;
   edit_message: (
@@ -282,5 +352,23 @@ export interface ClientToServerEvents {
   set_status: (
     data: { status: UserStatus; customStatus?: string },
     callback: (response: { ok: boolean; error?: string }) => void
+  ) => void;
+  // Voice events
+  voice_join: (
+    channelId: string,
+    callback: (response: { ok: boolean; participants?: VoiceParticipant[]; error?: string }) => void
+  ) => void;
+  voice_leave: (
+    callback: (response: { ok: boolean; error?: string }) => void
+  ) => void;
+  voice_offer: (data: { to: string; offer: RTCSessionDescriptionLike }) => void;
+  voice_answer: (data: { to: string; answer: RTCSessionDescriptionLike }) => void;
+  voice_ice_candidate: (data: { to: string; candidate: RTCIceCandidateLike }) => void;
+  voice_state_update: (
+    data: { isMuted: boolean; isDeafened: boolean },
+    callback: (response: { ok: boolean; error?: string }) => void
+  ) => void;
+  get_voice_states: (
+    callback: (states: VoiceChannelState[]) => void
   ) => void;
 }

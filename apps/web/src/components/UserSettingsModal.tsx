@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import type { User } from "@watercooler/shared";
-import { X, UserIcon, Lock, Palette, Camera } from "lucide-react";
+import { X, UserIcon, Lock, Palette, Camera, Github, Twitter, Globe } from "lucide-react";
 import { UserAvatar } from "./UserAvatar";
 
 interface Props {
@@ -75,19 +75,35 @@ function SidebarButton({ icon, label, active, onClick }: { icon: React.ReactNode
 function ProfileTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User) => void }) {
   const [username, setUsername] = useState(user.username);
   const [bio, setBio] = useState(user.bio || "");
+  const [pronouns, setPronouns] = useState(user.pronouns || "");
+  const [github, setGithub] = useState(user.connectedLinks?.github || "");
+  const [twitter, setTwitter] = useState(user.connectedLinks?.twitter || "");
+  const [website, setWebsite] = useState(user.connectedLinks?.website || "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const bannerInputRef = useRef<HTMLInputElement>(null);
 
   const handleSave = async () => {
     setError("");
     setSuccess("");
     setSaving(true);
     try {
-      const updates: Record<string, string> = {};
+      const updates: Record<string, unknown> = {};
       if (username !== user.username) updates.username = username;
       if (bio !== (user.bio || "")) updates.bio = bio;
+      if (pronouns !== (user.pronouns || "")) updates.pronouns = pronouns;
+
+      const newLinks = {
+        github: github || null,
+        twitter: twitter || null,
+        website: website || null,
+      };
+      const oldLinks = user.connectedLinks || {};
+      if (JSON.stringify(newLinks) !== JSON.stringify(oldLinks)) {
+        updates.connectedLinks = newLinks;
+      }
 
       if (Object.keys(updates).length === 0) {
         setError("No changes to save");
@@ -130,8 +146,53 @@ function ProfileTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User
     e.target.value = "";
   };
 
+  const handleBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch("/api/users/me/banner", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+      if (res.ok) {
+        const { bannerUrl } = await res.json();
+        onUserUpdate({ ...user, bannerUrl });
+      } else {
+        const err = await res.json();
+        setError(err.error || "Failed to upload banner");
+      }
+    } catch {
+      setError("Failed to upload banner");
+    }
+    e.target.value = "";
+  };
+
   return (
     <div className="max-w-lg space-y-6">
+      {/* Banner */}
+      <div>
+        <label className="block text-sm font-medium mb-3">Banner</label>
+        <div className="relative w-full h-24 rounded-lg overflow-hidden bg-[var(--muted)]">
+          {user.bannerUrl ? (
+            <img src={user.bannerUrl} alt="Banner" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-[var(--primary)]/20" />
+          )}
+          <button
+            onClick={() => bannerInputRef.current?.click()}
+            className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity"
+            title="Change banner"
+          >
+            <Camera size={20} className="text-white" />
+          </button>
+          <input ref={bannerInputRef} type="file" accept="image/jpeg,image/png,image/gif,image/webp" className="hidden" onChange={handleBannerUpload} />
+        </div>
+        <p className="text-xs text-[var(--muted-foreground)] mt-1">Recommended: 600x240. Max 4MB.</p>
+      </div>
+
       {/* Avatar */}
       <div>
         <label className="block text-sm font-medium mb-3">Avatar</label>
@@ -174,6 +235,19 @@ function ProfileTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User
         <p className="text-xs text-[var(--muted-foreground)] mt-1">2-32 characters. Letters, numbers, underscores, hyphens only.</p>
       </div>
 
+      {/* Pronouns */}
+      <div>
+        <label className="block text-sm font-medium mb-2">Pronouns</label>
+        <input
+          value={pronouns}
+          onChange={(e) => setPronouns(e.target.value)}
+          placeholder="e.g. they/them, she/her, he/him"
+          className="w-full px-3 py-2 bg-[var(--muted)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+          maxLength={50}
+        />
+        <p className="text-xs text-[var(--muted-foreground)] mt-1">Optional. Max 50 characters.</p>
+      </div>
+
       {/* Bio */}
       <div>
         <label className="block text-sm font-medium mb-2">Bio</label>
@@ -186,6 +260,40 @@ function ProfileTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User
           className="w-full px-3 py-2 bg-[var(--muted)] rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
         />
         <p className="text-xs text-[var(--muted-foreground)] mt-1">{bio.length}/500</p>
+      </div>
+
+      {/* Connected Links */}
+      <div className="space-y-3">
+        <label className="block text-sm font-medium">Connected Links</label>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Github size={16} className="text-[var(--muted-foreground)] shrink-0" />
+            <input
+              value={github}
+              onChange={(e) => setGithub(e.target.value)}
+              placeholder="https://github.com/username"
+              className="w-full px-3 py-2 bg-[var(--muted)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Twitter size={16} className="text-[var(--muted-foreground)] shrink-0" />
+            <input
+              value={twitter}
+              onChange={(e) => setTwitter(e.target.value)}
+              placeholder="https://twitter.com/username"
+              className="w-full px-3 py-2 bg-[var(--muted)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Globe size={16} className="text-[var(--muted-foreground)] shrink-0" />
+            <input
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              placeholder="https://yourwebsite.com"
+              className="w-full px-3 py-2 bg-[var(--muted)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+            />
+          </div>
+        </div>
       </div>
 
       {error && <p className="text-sm text-[var(--destructive)]">{error}</p>}

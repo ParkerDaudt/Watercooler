@@ -23,6 +23,9 @@ export const users = pgTable("users", {
   status: varchar("status", { length: 20 }).notNull().default("online"),
   customStatus: text("custom_status").default(""),
   avatarUrl: text("avatar_url").default(""),
+  bannerUrl: text("banner_url").default(""),
+  pronouns: varchar("pronouns", { length: 50 }).default(""),
+  connectedLinks: jsonb("connected_links").default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -437,5 +440,50 @@ export const warnings = pgTable(
   },
   (t) => ({
     communityUserIdx: index("warnings_community_user_idx").on(t.communityId, t.userId),
+  })
+);
+
+export const userNotes = pgTable(
+  "user_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    authorId: uuid("author_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    targetUserId: uuid("target_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    content: text("content").notNull().default(""),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    authorTargetIdx: uniqueIndex("user_notes_author_target_idx").on(t.authorId, t.targetUserId),
+  })
+);
+
+export const badges = pgTable("badges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 64 }).notNull().unique(),
+  description: text("description").notNull().default(""),
+  icon: varchar("icon", { length: 64 }).notNull(),
+  color: varchar("color", { length: 20 }).notNull().default("#6366f1"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userBadges = pgTable(
+  "user_badges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    badgeId: uuid("badge_id")
+      .notNull()
+      .references(() => badges.id, { onDelete: "cascade" }),
+    awardedAt: timestamp("awarded_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    userIdx: index("user_badges_user_idx").on(t.userId),
+    uniqueUserBadge: unique("user_badges_user_badge_unique").on(t.userId, t.badgeId),
   })
 );
