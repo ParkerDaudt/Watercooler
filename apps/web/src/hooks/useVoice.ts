@@ -17,14 +17,18 @@ export interface UseVoiceReturn {
   isMuted: boolean;
   isDeafened: boolean;
   isVideoOn: boolean;
+  isScreenSharing: boolean;
   localStream: MediaStream | null;
+  screenStream: MediaStream | null;
   remoteStreams: Map<string, MediaStream>;
+  hasVideoSender: boolean;
   error: string | null;
   joinChannel: (channelId: string) => Promise<void>;
   leaveChannel: () => void;
   toggleMute: () => void;
   toggleDeafen: () => void;
   toggleVideo: () => void;
+  toggleScreenShare: () => void;
 }
 
 export function useVoice(userId: string): UseVoiceReturn {
@@ -34,7 +38,10 @@ export function useVoice(userId: string): UseVoiceReturn {
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [hasVideoSender, setHasVideoSender] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Incrementing counter to force re-renders when remote streams change
   const [, setStreamVersion] = useState(0);
@@ -43,15 +50,28 @@ export function useVoice(userId: string): UseVoiceReturn {
   const audioElements = useRef<Map<string, HTMLAudioElement>>(new Map());
   const remoteStreams = useRef<Map<string, MediaStream>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const currentChannelRef = useRef<string | null>(null);
   const isMutedRef = useRef(false);
   const isDeafenedRef = useRef(false);
   const isVideoOnRef = useRef(false);
+  const isScreenSharingRef = useRef(false);
 
   useEffect(() => { currentChannelRef.current = currentChannelId; }, [currentChannelId]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { isDeafenedRef.current = isDeafened; }, [isDeafened]);
   useEffect(() => { isVideoOnRef.current = isVideoOn; }, [isVideoOn]);
+  useEffect(() => { isScreenSharingRef.current = isScreenSharing; }, [isScreenSharing]);
+
+  const emitStateUpdate = useCallback((overrides: Partial<{ isMuted: boolean; isDeafened: boolean; isVideoOn: boolean; isScreenSharing: boolean }> = {}) => {
+    const socket = getSocket();
+    socket.emit("voice_state_update", {
+      isMuted: overrides.isMuted ?? isMutedRef.current,
+      isDeafened: overrides.isDeafened ?? isDeafenedRef.current,
+      isVideoOn: overrides.isVideoOn ?? isVideoOnRef.current,
+      isScreenSharing: overrides.isScreenSharing ?? isScreenSharingRef.current,
+    }, () => {});
+  }, []);
 
   const createPeerConnection = useCallback((peerId: string, stream: MediaStream): RTCPeerConnection => {
     const socket = getSocket();
@@ -60,6 +80,17 @@ export function useVoice(userId: string): UseVoiceReturn {
     // Add all tracks (audio + video) to the peer connection
     for (const track of stream.getTracks()) {
       pc.addTrack(track, stream);
+    }
+
+    // If screen sharing is active, replace the video sender's track with the screen track
+    if (screenStreamRef.current) {
+      const screenTrack = screenStreamRef.current.getVideoTracks()[0];
+      if (screenTrack) {
+        const videoSender = pc.getSenders().find(s => s.track?.kind === "video");
+        if (videoSender) {
+          videoSender.replaceTrack(screenTrack);
+        }
+      }
     }
 
     pc.ontrack = (event) => {
@@ -116,6 +147,32 @@ export function useVoice(userId: string): UseVoiceReturn {
     setStreamVersion(v => v + 1);
   }, []);
 
+  const stopScreenShare = useCallback(() => {
+    if (!screenStreamRef.current) return;
+
+    // Restore camera track on all peer connections
+    const cameraTrack = localStreamRef.current?.getVideoTracks()[0] ?? null;
+    for (const [, pc] of peerConnections.current) {
+      const videoSender = pc.getSenders().find(s => s.track?.kind === "video");
+      if (videoSender) {
+        videoSender.replaceTrack(cameraTrack);
+      }
+    }
+
+    // Restore camera track enabled state
+    if (cameraTrack) {
+      cameraTrack.enabled = isVideoOnRef.current;
+    }
+
+    // Stop screen tracks
+    screenStreamRef.current.getTracks().forEach(t => t.stop());
+    screenStreamRef.current = null;
+    setScreenStream(null);
+    setIsScreenSharing(false);
+
+    emitStateUpdate({ isScreenSharing: false });
+  }, [emitStateUpdate]);
+
   const joinChannel = useCallback(async (channelId: string) => {
     const socket = getSocket();
     setError(null);
@@ -144,6 +201,9 @@ export function useVoice(userId: string): UseVoiceReturn {
       track.enabled = false;
     }
 
+    // Track whether we have video capability (for screen share button visibility)
+    setHasVideoSender(stream.getVideoTracks().length > 0);
+
     localStreamRef.current = stream;
     setLocalStream(stream);
 
@@ -162,6 +222,7 @@ export function useVoice(userId: string): UseVoiceReturn {
       setIsMuted(false);
       setIsDeafened(false);
       setIsVideoOn(false);
+      setIsScreenSharing(false);
 
       // Create peer connections to existing participants and send offers
       const existingPeers = (response.participants || []).filter(p => p.userId !== userId);
@@ -180,11 +241,20 @@ export function useVoice(userId: string): UseVoiceReturn {
   const leaveChannel = useCallback(() => {
     const socket = getSocket();
 
+    // Stop screen share if active
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(t => t.stop());
+      screenStreamRef.current = null;
+      setScreenStream(null);
+      setIsScreenSharing(false);
+    }
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(t => t.stop());
       localStreamRef.current = null;
     }
     setLocalStream(null);
+    setHasVideoSender(false);
 
     cleanupConnections();
     socket.emit("voice_leave", () => {});
@@ -198,7 +268,6 @@ export function useVoice(userId: string): UseVoiceReturn {
   }, [cleanupConnections]);
 
   const toggleMute = useCallback(() => {
-    const socket = getSocket();
     const newMuted = !isMutedRef.current;
     setIsMuted(newMuted);
 
@@ -208,11 +277,10 @@ export function useVoice(userId: string): UseVoiceReturn {
       }
     }
 
-    socket.emit("voice_state_update", { isMuted: newMuted, isDeafened: isDeafenedRef.current, isVideoOn: isVideoOnRef.current }, () => {});
-  }, []);
+    emitStateUpdate({ isMuted: newMuted });
+  }, [emitStateUpdate]);
 
   const toggleDeafen = useCallback(() => {
-    const socket = getSocket();
     const newDeafened = !isDeafenedRef.current;
     setIsDeafened(newDeafened);
 
@@ -232,14 +300,18 @@ export function useVoice(userId: string): UseVoiceReturn {
       }
     }
 
-    socket.emit("voice_state_update", { isMuted: newMuted, isDeafened: newDeafened, isVideoOn: isVideoOnRef.current }, () => {});
-  }, []);
+    emitStateUpdate({ isMuted: newMuted, isDeafened: newDeafened });
+  }, [emitStateUpdate]);
 
   const toggleVideo = useCallback(() => {
-    const socket = getSocket();
     // Check if we have video tracks
     if (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0) {
       return; // No camera available, do nothing
+    }
+
+    // If screen sharing, stop it first
+    if (isScreenSharingRef.current) {
+      stopScreenShare();
     }
 
     const newVideoOn = !isVideoOnRef.current;
@@ -249,8 +321,60 @@ export function useVoice(userId: string): UseVoiceReturn {
       track.enabled = newVideoOn;
     }
 
-    socket.emit("voice_state_update", { isMuted: isMutedRef.current, isDeafened: isDeafenedRef.current, isVideoOn: newVideoOn }, () => {});
-  }, []);
+    emitStateUpdate({ isVideoOn: newVideoOn, isScreenSharing: false });
+  }, [emitStateUpdate, stopScreenShare]);
+
+  const toggleScreenShare = useCallback(async () => {
+    // If already screen sharing, stop
+    if (isScreenSharingRef.current) {
+      stopScreenShare();
+      return;
+    }
+
+    // Need video sender to replace track
+    if (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0) {
+      return;
+    }
+
+    let screenMediaStream: MediaStream;
+    try {
+      screenMediaStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    } catch {
+      // User cancelled the screen picker or permission denied
+      return;
+    }
+
+    const screenTrack = screenMediaStream.getVideoTracks()[0];
+    if (!screenTrack) {
+      screenMediaStream.getTracks().forEach(t => t.stop());
+      return;
+    }
+
+    // Disable camera track (keep it alive for restoration)
+    for (const track of localStreamRef.current.getVideoTracks()) {
+      track.enabled = false;
+    }
+
+    // Replace video track on all peer connections with screen track
+    for (const [, pc] of peerConnections.current) {
+      const videoSender = pc.getSenders().find(s => s.track?.kind === "video");
+      if (videoSender) {
+        await videoSender.replaceTrack(screenTrack);
+      }
+    }
+
+    screenStreamRef.current = screenMediaStream;
+    setScreenStream(screenMediaStream);
+    setIsScreenSharing(true);
+    setIsVideoOn(false);
+
+    emitStateUpdate({ isScreenSharing: true, isVideoOn: false });
+
+    // Listen for browser's "Stop sharing" button
+    screenTrack.onended = () => {
+      stopScreenShare();
+    };
+  }, [emitStateUpdate, stopScreenShare]);
 
   // Socket event listeners for voice signaling
   useEffect(() => {
@@ -280,10 +404,10 @@ export function useVoice(userId: string): UseVoiceReturn {
       setStreamVersion(v => v + 1);
     };
 
-    const handleVoiceStateUpdate = (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean }) => {
+    const handleVoiceStateUpdate = (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean; isScreenSharing: boolean }) => {
       if (data.channelId !== currentChannelRef.current) return;
       setParticipants(prev => prev.map(p =>
-        p.userId === data.userId ? { ...p, isMuted: data.isMuted, isDeafened: data.isDeafened, isVideoOn: data.isVideoOn } : p
+        p.userId === data.userId ? { ...p, isMuted: data.isMuted, isDeafened: data.isDeafened, isVideoOn: data.isVideoOn, isScreenSharing: data.isScreenSharing } : p
       ));
     };
 
@@ -345,6 +469,9 @@ export function useVoice(userId: string): UseVoiceReturn {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(t => t.stop());
+      }
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(t => t.stop());
       }
@@ -359,13 +486,17 @@ export function useVoice(userId: string): UseVoiceReturn {
     isMuted,
     isDeafened,
     isVideoOn,
+    isScreenSharing,
     localStream,
+    screenStream,
     remoteStreams: remoteStreams.current,
+    hasVideoSender,
     error,
     joinChannel,
     leaveChannel,
     toggleMute,
     toggleDeafen,
     toggleVideo,
+    toggleScreenShare,
   };
 }

@@ -598,6 +598,7 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string | strin
           isMuted: false,
           isDeafened: false,
           isVideoOn: false,
+          isScreenSharing: false,
         };
 
         // Track state
@@ -678,9 +679,10 @@ export function setupSocketIO(httpServer: HttpServer, corsOrigin: string | strin
         participant.isMuted = data.isMuted;
         participant.isDeafened = data.isDeafened;
         participant.isVideoOn = data.isVideoOn;
+        participant.isScreenSharing = data.isScreenSharing;
 
         // Broadcast globally for sidebar updates
-        io.emit("voice_state_update", { channelId, userId, isMuted: data.isMuted, isDeafened: data.isDeafened, isVideoOn: data.isVideoOn });
+        io.emit("voice_state_update", { channelId, userId, isMuted: data.isMuted, isDeafened: data.isDeafened, isVideoOn: data.isVideoOn, isScreenSharing: data.isScreenSharing });
 
         callback({ ok: true });
       } catch {

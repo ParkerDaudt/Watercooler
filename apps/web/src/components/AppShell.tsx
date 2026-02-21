@@ -183,12 +183,12 @@ export function AppShell({ user, onLogout }: Props) {
       });
     };
 
-    const handleVoiceStateUpdate = ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d, isVideoOn: v }: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean }) => {
+    const handleVoiceStateUpdate = ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d, isVideoOn: v, isScreenSharing: ss }: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean; isScreenSharing: boolean }) => {
       setVoiceParticipantsMap((prev) => {
         const next = new Map(prev);
         const existing = next.get(channelId) || [];
         next.set(channelId, existing.map((p) =>
-          p.userId === updatedUserId ? { ...p, isMuted: m, isDeafened: d, isVideoOn: v } : p
+          p.userId === updatedUserId ? { ...p, isMuted: m, isDeafened: d, isVideoOn: v, isScreenSharing: ss } : p
         ));
         return next;
       });
@@ -374,9 +374,12 @@ export function AppShell({ user, onLogout }: Props) {
                   isMuted={voice.isMuted}
                   isDeafened={voice.isDeafened}
                   isVideoOn={voice.isVideoOn}
+                  isScreenSharing={voice.isScreenSharing}
+                  hasVideoSender={voice.hasVideoSender}
                   onToggleMute={voice.toggleMute}
                   onToggleDeafen={voice.toggleDeafen}
                   onToggleVideo={voice.toggleVideo}
+                  onToggleScreenShare={voice.toggleScreenShare}
                   onDisconnect={voice.leaveChannel}
                 />
               ) : undefined
@@ -430,15 +433,19 @@ export function AppShell({ user, onLogout }: Props) {
             isMuted={voice.isMuted}
             isDeafened={voice.isDeafened}
             isVideoOn={voice.isVideoOn}
+            isScreenSharing={voice.isScreenSharing}
             localStream={voice.localStream}
+            screenStream={voice.screenStream}
             remoteStreams={voice.remoteStreams}
             currentUserId={user.id}
+            hasVideoSender={voice.hasVideoSender}
             error={voice.error}
             onJoin={() => voice.joinChannel(activeChannelId)}
             onLeave={voice.leaveChannel}
             onToggleMute={voice.toggleMute}
             onToggleDeafen={voice.toggleDeafen}
             onToggleVideo={voice.toggleVideo}
+            onToggleScreenShare={voice.toggleScreenShare}
             onMenuClick={() => setMobileSidebarOpen(true)}
           />
         )}

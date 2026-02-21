@@ -1,18 +1,21 @@
 "use client";
-import { Volume2, MicOff, HeadphoneOff, PhoneOff, Mic, Headphones, Camera, CameraOff } from "lucide-react";
+import { Volume2, MicOff, HeadphoneOff, PhoneOff, Mic, Headphones, Camera, CameraOff, MonitorUp, Monitor } from "lucide-react";
 
 interface Props {
   channelName: string;
   isMuted: boolean;
   isDeafened: boolean;
   isVideoOn: boolean;
+  isScreenSharing: boolean;
+  hasVideoSender: boolean;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
   onToggleVideo: () => void;
+  onToggleScreenShare: () => void;
   onDisconnect: () => void;
 }
 
-export function VoiceStatusBar({ channelName, isMuted, isDeafened, isVideoOn, onToggleMute, onToggleDeafen, onToggleVideo, onDisconnect }: Props) {
+export function VoiceStatusBar({ channelName, isMuted, isDeafened, isVideoOn, isScreenSharing, hasVideoSender, onToggleMute, onToggleDeafen, onToggleVideo, onToggleScreenShare, onDisconnect }: Props) {
   return (
     <div className="border-t border-[var(--border)] bg-[var(--card)] p-2">
       <div className="flex items-center gap-2 mb-1.5">
@@ -44,6 +47,15 @@ export function VoiceStatusBar({ channelName, isMuted, isDeafened, isVideoOn, on
         >
           {isVideoOn ? <Camera size={14} /> : <CameraOff size={14} />}
         </button>
+        {hasVideoSender && (
+          <button
+            onClick={onToggleScreenShare}
+            className={`p-1.5 rounded ${isScreenSharing ? "text-green-500 bg-green-500/10" : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]"}`}
+            title={isScreenSharing ? "Stop sharing" : "Share screen"}
+          >
+            {isScreenSharing ? <MonitorUp size={14} /> : <Monitor size={14} />}
+          </button>
+        )}
         <button
           onClick={onDisconnect}
           className="p-1.5 rounded text-red-500 hover:bg-red-500/10 ml-auto"

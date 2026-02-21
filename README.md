@@ -41,12 +41,13 @@ A self-hosted, real-time community chat platform built for local communities, or
 - WebRTC peer-to-peer mesh audio and video
 - Socket.IO-based signaling (offer/answer/ICE relay)
 - Optional video with camera toggle (starts audio-only, no renegotiation needed)
+- Screen sharing via `getDisplayMedia()` with `replaceTrack` (no renegotiation)
 - Automatic fallback to audio-only when no camera is available
-- Local video preview with mirror effect
+- Local video preview with mirror effect (disabled during screen share)
 - Remote video tiles with responsive grid layout
-- Mute, deafen, camera, and disconnect controls
-- Voice channel participants visible in sidebar with camera/mute/deafen indicators
-- Persistent voice status bar with camera toggle when connected
+- Mute, deafen, camera, screen share, and disconnect controls
+- Voice channel participants visible in sidebar with screen share/camera/mute/deafen indicators
+- Persistent voice status bar with camera and screen share toggles
 - STUN server support for NAT traversal
 
 ### User Presence & Profiles

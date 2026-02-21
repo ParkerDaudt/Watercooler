@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useEffect } from "react";
-import { Volume2, Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Camera, CameraOff, Menu } from "lucide-react";
+import { Volume2, Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Camera, CameraOff, MonitorUp, Monitor, Menu } from "lucide-react";
 import type { VoiceParticipant } from "@watercooler/shared";
 import { UserAvatar } from "./UserAvatar";
 
@@ -12,15 +12,19 @@ interface Props {
   isMuted: boolean;
   isDeafened: boolean;
   isVideoOn: boolean;
+  isScreenSharing: boolean;
   localStream: MediaStream | null;
+  screenStream: MediaStream | null;
   remoteStreams: Map<string, MediaStream>;
   currentUserId: string;
+  hasVideoSender: boolean;
   error: string | null;
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
   onToggleVideo: () => void;
+  onToggleScreenShare: () => void;
   onMenuClick?: () => void;
 }
 
@@ -31,18 +35,22 @@ export function VoiceChannel({
   isMuted,
   isDeafened,
   isVideoOn,
+  isScreenSharing,
   localStream,
+  screenStream,
   remoteStreams,
   currentUserId,
+  hasVideoSender,
   error,
   onJoin,
   onLeave,
   onToggleMute,
   onToggleDeafen,
   onToggleVideo,
+  onToggleScreenShare,
   onMenuClick,
 }: Props) {
-  const anyoneHasVideo = participants.some((p) => p.isVideoOn);
+  const anyoneHasVideo = participants.some((p) => p.isVideoOn || p.isScreenSharing);
 
   return (
     <div className="flex-1 flex flex-col">
@@ -93,7 +101,9 @@ export function VoiceChannel({
             }`}>
               {participants.map((p) => {
                 const isLocal = p.userId === currentUserId;
-                const stream = isLocal ? localStream : remoteStreams.get(p.userId);
+                const stream = isLocal
+                  ? (p.isScreenSharing ? screenStream : localStream)
+                  : remoteStreams.get(p.userId);
                 return (
                   <VoiceParticipantCard
                     key={p.userId}
@@ -147,6 +157,20 @@ export function VoiceChannel({
             {isVideoOn ? <Camera size={20} /> : <CameraOff size={20} />}
           </button>
 
+          {hasVideoSender && (
+            <button
+              onClick={onToggleScreenShare}
+              className={`p-3 rounded-full transition-colors ${
+                isScreenSharing
+                  ? "bg-green-500/20 text-green-500 hover:bg-green-500/30"
+                  : "bg-[var(--muted)] text-[var(--foreground)] hover:bg-[var(--border)]"
+              }`}
+              title={isScreenSharing ? "Stop sharing" : "Share screen"}
+            >
+              {isScreenSharing ? <MonitorUp size={20} /> : <Monitor size={20} />}
+            </button>
+          )}
+
           <button
             onClick={onLeave}
             className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 transition-colors"
@@ -172,12 +196,13 @@ function VoiceParticipantCard({
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && stream && participant.isVideoOn) {
+    if (videoRef.current && stream && (participant.isVideoOn || participant.isScreenSharing)) {
       videoRef.current.srcObject = stream;
     }
-  }, [stream, participant.isVideoOn]);
+  }, [stream, participant.isVideoOn, participant.isScreenSharing]);
 
-  const showVideo = participant.isVideoOn && stream;
+  const showVideo = (participant.isVideoOn || participant.isScreenSharing) && stream;
+  const isMirrored = isLocal && !participant.isScreenSharing;
 
   return (
     <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-[var(--card)] border border-[var(--border)] overflow-hidden">
@@ -189,12 +214,12 @@ function VoiceParticipantCard({
             playsInline
             muted={isLocal}
             className="w-full h-full object-cover"
-            style={isLocal ? { transform: "scaleX(-1)" } : undefined}
+            style={isMirrored ? { transform: "scaleX(-1)" } : undefined}
           />
           <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
             <div className="flex items-center gap-1.5">
               <span className="text-xs font-medium text-white truncate">
-                {participant.username}
+                {participant.isScreenSharing ? `${participant.username} (sharing screen)` : participant.username}
               </span>
               {participant.isMuted && <MicOff size={10} className="text-red-400 shrink-0" />}
               {participant.isDeafened && <HeadphoneOff size={10} className="text-red-400 shrink-0" />}
