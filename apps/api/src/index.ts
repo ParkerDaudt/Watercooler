@@ -24,12 +24,27 @@ import { channelPermissionRoutes } from "./routes/channelPermissions.js";
 import { ZodError } from "zod";
 import { join, resolve, extname } from "path";
 import { readFileSync, existsSync } from "fs";
+import { networkInterfaces } from "os";
 
-// In development, accept both localhost and 127.0.0.1
-const allowedOrigins = [env.CORS_ORIGIN];
+// Support comma-separated CORS_ORIGIN values (e.g. "http://localhost:3000,http://192.168.0.8:3000")
+const allowedOrigins = env.CORS_ORIGIN.split(",").map(s => s.trim());
 if (env.NODE_ENV === "development") {
-  const alt = env.CORS_ORIGIN.replace("localhost", "127.0.0.1");
-  if (alt !== env.CORS_ORIGIN) allowedOrigins.push(alt);
+  // Also accept 127.0.0.1 variant of localhost origins
+  for (const origin of [...allowedOrigins]) {
+    const alt = origin.replace("localhost", "127.0.0.1");
+    if (alt !== origin && !allowedOrigins.includes(alt)) allowedOrigins.push(alt);
+  }
+  // Auto-detect LAN IPs so other devices on the network can connect
+  const nets = networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) {
+        const port = allowedOrigins[0]?.match(/:(\d+)$/)?.[1] || "3000";
+        const lanOrigin = `http://${net.address}:${port}`;
+        if (!allowedOrigins.includes(lanOrigin)) allowedOrigins.push(lanOrigin);
+      }
+    }
+  }
 }
 
 const app = Fastify({
