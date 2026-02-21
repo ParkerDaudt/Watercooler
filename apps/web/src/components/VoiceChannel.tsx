@@ -1,5 +1,6 @@
 "use client";
-import { Volume2, Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Menu } from "lucide-react";
+import { useRef, useEffect } from "react";
+import { Volume2, Mic, MicOff, Headphones, HeadphoneOff, PhoneOff, Camera, CameraOff, Menu } from "lucide-react";
 import type { VoiceParticipant } from "@watercooler/shared";
 import { UserAvatar } from "./UserAvatar";
 
@@ -10,11 +11,16 @@ interface Props {
   participants: VoiceParticipant[];
   isMuted: boolean;
   isDeafened: boolean;
+  isVideoOn: boolean;
+  localStream: MediaStream | null;
+  remoteStreams: Map<string, MediaStream>;
+  currentUserId: string;
   error: string | null;
   onJoin: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
+  onToggleVideo: () => void;
   onMenuClick?: () => void;
 }
 
@@ -24,13 +30,20 @@ export function VoiceChannel({
   participants,
   isMuted,
   isDeafened,
+  isVideoOn,
+  localStream,
+  remoteStreams,
+  currentUserId,
   error,
   onJoin,
   onLeave,
   onToggleMute,
   onToggleDeafen,
+  onToggleVideo,
   onMenuClick,
 }: Props) {
+  const anyoneHasVideo = participants.some((p) => p.isVideoOn);
+
   return (
     <div className="flex-1 flex flex-col">
       {/* Header */}
@@ -48,7 +61,7 @@ export function VoiceChannel({
       </div>
 
       {/* Main area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8">
+      <div className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto">
         {error && (
           <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-red-500 text-sm max-w-md text-center">
             {error}
@@ -72,11 +85,24 @@ export function VoiceChannel({
             </button>
           </div>
         ) : (
-          <div className="w-full max-w-2xl">
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {participants.map((p) => (
-                <VoiceParticipantCard key={p.userId} participant={p} />
-              ))}
+          <div className="w-full max-w-4xl">
+            <div className={`grid gap-4 ${
+              anyoneHasVideo
+                ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+                : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4"
+            }`}>
+              {participants.map((p) => {
+                const isLocal = p.userId === currentUserId;
+                const stream = isLocal ? localStream : remoteStreams.get(p.userId);
+                return (
+                  <VoiceParticipantCard
+                    key={p.userId}
+                    participant={p}
+                    stream={stream || null}
+                    isLocal={isLocal}
+                  />
+                );
+              })}
             </div>
           </div>
         )}
@@ -110,6 +136,18 @@ export function VoiceChannel({
           </button>
 
           <button
+            onClick={onToggleVideo}
+            className={`p-3 rounded-full transition-colors ${
+              isVideoOn
+                ? "bg-green-500/20 text-green-500 hover:bg-green-500/30"
+                : "bg-[var(--muted)] text-[var(--foreground)] hover:bg-[var(--border)]"
+            }`}
+            title={isVideoOn ? "Turn off camera" : "Turn on camera"}
+          >
+            {isVideoOn ? <Camera size={20} /> : <CameraOff size={20} />}
+          </button>
+
+          <button
             onClick={onLeave}
             className="p-3 rounded-full bg-red-500 text-white hover:bg-red-600 transition-colors"
             title="Disconnect"
@@ -122,26 +160,68 @@ export function VoiceChannel({
   );
 }
 
-function VoiceParticipantCard({ participant }: { participant: VoiceParticipant }) {
+function VoiceParticipantCard({
+  participant,
+  stream,
+  isLocal,
+}: {
+  participant: VoiceParticipant;
+  stream: MediaStream | null;
+  isLocal: boolean;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current && stream && participant.isVideoOn) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream, participant.isVideoOn]);
+
+  const showVideo = participant.isVideoOn && stream;
+
   return (
-    <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-[var(--card)] border border-[var(--border)]">
-      <div className="relative">
-        <UserAvatar
-          username={participant.username}
-          avatarUrl={participant.avatarUrl}
-          size={16}
-        />
-        {(participant.isMuted || participant.isDeafened) && (
-          <div className="absolute -bottom-1 -right-1 bg-[var(--card)] rounded-full p-0.5">
-            {participant.isDeafened ? (
-              <HeadphoneOff size={12} className="text-red-500" />
-            ) : (
-              <MicOff size={12} className="text-red-500" />
+    <div className="flex flex-col items-center gap-2 p-4 rounded-xl bg-[var(--card)] border border-[var(--border)] overflow-hidden">
+      {showVideo ? (
+        <div className="relative w-full aspect-video rounded-lg overflow-hidden bg-black">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={isLocal}
+            className="w-full h-full object-cover"
+            style={isLocal ? { transform: "scaleX(-1)" } : undefined}
+          />
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-white truncate">
+                {participant.username}
+              </span>
+              {participant.isMuted && <MicOff size={10} className="text-red-400 shrink-0" />}
+              {participant.isDeafened && <HeadphoneOff size={10} className="text-red-400 shrink-0" />}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="relative">
+            <UserAvatar
+              username={participant.username}
+              avatarUrl={participant.avatarUrl}
+              size={16}
+            />
+            {(participant.isMuted || participant.isDeafened) && (
+              <div className="absolute -bottom-1 -right-1 bg-[var(--card)] rounded-full p-0.5">
+                {participant.isDeafened ? (
+                  <HeadphoneOff size={12} className="text-red-500" />
+                ) : (
+                  <MicOff size={12} className="text-red-500" />
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
-      <span className="text-xs font-medium truncate max-w-full">{participant.username}</span>
+          <span className="text-xs font-medium truncate max-w-full">{participant.username}</span>
+        </>
+      )}
     </div>
   );
 }

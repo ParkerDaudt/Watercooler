@@ -38,11 +38,15 @@ A self-hosted, real-time community chat platform built for local communities, or
 - Channel-level permission overrides per role
 
 ### Voice Channels
-- WebRTC peer-to-peer mesh audio
+- WebRTC peer-to-peer mesh audio and video
 - Socket.IO-based signaling (offer/answer/ICE relay)
-- Mute, deafen, and disconnect controls
-- Voice channel participants visible in sidebar
-- Persistent voice status bar when connected
+- Optional video with camera toggle (starts audio-only, no renegotiation needed)
+- Automatic fallback to audio-only when no camera is available
+- Local video preview with mirror effect
+- Remote video tiles with responsive grid layout
+- Mute, deafen, camera, and disconnect controls
+- Voice channel participants visible in sidebar with camera/mute/deafen indicators
+- Persistent voice status bar with camera toggle when connected
 - STUN server support for NAT traversal
 
 ### User Presence & Profiles
@@ -521,7 +525,7 @@ watercooler/
 | `voice_offer` | Client -> Server | Send WebRTC offer to a peer |
 | `voice_answer` | Client -> Server | Send WebRTC answer to a peer |
 | `voice_ice_candidate` | Client -> Server | Relay ICE candidate to a peer |
-| `voice_state_update` | Bidirectional | Update/broadcast mute/deafen state |
+| `voice_state_update` | Bidirectional | Update/broadcast mute/deafen/video state |
 | `get_voice_states` | Client -> Server | Fetch all voice channel participants |
 | `voice_user_joined` | Server -> Client | User joined a voice channel |
 | `voice_user_left` | Server -> Client | User left a voice channel |

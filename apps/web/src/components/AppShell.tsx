@@ -183,12 +183,12 @@ export function AppShell({ user, onLogout }: Props) {
       });
     };
 
-    const handleVoiceStateUpdate = ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d }: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean }) => {
+    const handleVoiceStateUpdate = ({ channelId, userId: updatedUserId, isMuted: m, isDeafened: d, isVideoOn: v }: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean }) => {
       setVoiceParticipantsMap((prev) => {
         const next = new Map(prev);
         const existing = next.get(channelId) || [];
         next.set(channelId, existing.map((p) =>
-          p.userId === updatedUserId ? { ...p, isMuted: m, isDeafened: d } : p
+          p.userId === updatedUserId ? { ...p, isMuted: m, isDeafened: d, isVideoOn: v } : p
         ));
         return next;
       });
@@ -373,8 +373,10 @@ export function AppShell({ user, onLogout }: Props) {
                   channelName={channels.find(c => c.id === voice.currentChannelId)?.name || ""}
                   isMuted={voice.isMuted}
                   isDeafened={voice.isDeafened}
+                  isVideoOn={voice.isVideoOn}
                   onToggleMute={voice.toggleMute}
                   onToggleDeafen={voice.toggleDeafen}
+                  onToggleVideo={voice.toggleVideo}
                   onDisconnect={voice.leaveChannel}
                 />
               ) : undefined
@@ -427,11 +429,16 @@ export function AppShell({ user, onLogout }: Props) {
             }
             isMuted={voice.isMuted}
             isDeafened={voice.isDeafened}
+            isVideoOn={voice.isVideoOn}
+            localStream={voice.localStream}
+            remoteStreams={voice.remoteStreams}
+            currentUserId={user.id}
             error={voice.error}
             onJoin={() => voice.joinChannel(activeChannelId)}
             onLeave={voice.leaveChannel}
             onToggleMute={voice.toggleMute}
             onToggleDeafen={voice.toggleDeafen}
+            onToggleVideo={voice.toggleVideo}
             onMenuClick={() => setMobileSidebarOpen(true)}
           />
         )}

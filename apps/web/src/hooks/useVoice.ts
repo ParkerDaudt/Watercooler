@@ -16,11 +16,15 @@ export interface UseVoiceReturn {
   participants: VoiceParticipant[];
   isMuted: boolean;
   isDeafened: boolean;
+  isVideoOn: boolean;
+  localStream: MediaStream | null;
+  remoteStreams: Map<string, MediaStream>;
   error: string | null;
   joinChannel: (channelId: string) => Promise<void>;
   leaveChannel: () => void;
   toggleMute: () => void;
   toggleDeafen: () => void;
+  toggleVideo: () => void;
 }
 
 export function useVoice(userId: string): UseVoiceReturn {
@@ -29,30 +33,41 @@ export function useVoice(userId: string): UseVoiceReturn {
   const [participants, setParticipants] = useState<VoiceParticipant[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [isDeafened, setIsDeafened] = useState(false);
+  const [isVideoOn, setIsVideoOn] = useState(false);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Incrementing counter to force re-renders when remote streams change
+  const [, setStreamVersion] = useState(0);
 
   const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map());
   const audioElements = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const remoteStreams = useRef<Map<string, MediaStream>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
   const currentChannelRef = useRef<string | null>(null);
   const isMutedRef = useRef(false);
   const isDeafenedRef = useRef(false);
+  const isVideoOnRef = useRef(false);
 
   useEffect(() => { currentChannelRef.current = currentChannelId; }, [currentChannelId]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { isDeafenedRef.current = isDeafened; }, [isDeafened]);
+  useEffect(() => { isVideoOnRef.current = isVideoOn; }, [isVideoOn]);
 
   const createPeerConnection = useCallback((peerId: string, stream: MediaStream): RTCPeerConnection => {
     const socket = getSocket();
     const pc = new RTCPeerConnection(STUN_CONFIG);
 
-    for (const track of stream.getAudioTracks()) {
+    // Add all tracks (audio + video) to the peer connection
+    for (const track of stream.getTracks()) {
       pc.addTrack(track, stream);
     }
 
     pc.ontrack = (event) => {
       const remoteStream = event.streams[0];
       if (remoteStream) {
+        remoteStreams.current.set(peerId, remoteStream);
+        setStreamVersion(v => v + 1);
+
         let audio = audioElements.current.get(peerId);
         if (!audio) {
           audio = new Audio();
@@ -79,6 +94,8 @@ export function useVoice(userId: string): UseVoiceReturn {
         peerConnections.current.delete(peerId);
         const audio = audioElements.current.get(peerId);
         if (audio) { audio.srcObject = null; audioElements.current.delete(peerId); }
+        remoteStreams.current.delete(peerId);
+        setStreamVersion(v => v + 1);
       }
     };
 
@@ -95,50 +112,69 @@ export function useVoice(userId: string): UseVoiceReturn {
       audio.srcObject = null;
     }
     audioElements.current.clear();
+    remoteStreams.current.clear();
+    setStreamVersion(v => v + 1);
   }, []);
 
   const joinChannel = useCallback(async (channelId: string) => {
     const socket = getSocket();
     setError(null);
 
+    let stream: MediaStream;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      localStreamRef.current = stream;
-
-      socket.emit("voice_join", channelId, async (response) => {
-        if (!response.ok) {
-          stream.getTracks().forEach(t => t.stop());
-          localStreamRef.current = null;
-          setError(response.error || "Failed to join voice channel");
-          return;
+      // Try to get both audio and video
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    } catch {
+      // Fallback to audio-only if no camera or camera denied
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (err: unknown) {
+        const name = err instanceof Error ? err.name : "";
+        if (name === "NotAllowedError") {
+          setError("Microphone access denied. Please allow microphone access in your browser settings.");
+        } else {
+          setError("Failed to access microphone.");
         }
-
-        setCurrentChannelId(channelId);
-        setIsConnected(true);
-        setParticipants(response.participants || []);
-        setIsMuted(false);
-        setIsDeafened(false);
-
-        // Create peer connections to existing participants and send offers
-        const existingPeers = (response.participants || []).filter(p => p.userId !== userId);
-        for (const peer of existingPeers) {
-          const pc = createPeerConnection(peer.userId, stream);
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-          socket.emit("voice_offer", {
-            to: peer.userId,
-            offer: pc.localDescription!.toJSON() as RTCSessionDescriptionLike,
-          });
-        }
-      });
-    } catch (err: unknown) {
-      const name = err instanceof Error ? err.name : "";
-      if (name === "NotAllowedError") {
-        setError("Microphone access denied. Please allow microphone access in your browser settings.");
-      } else {
-        setError("Failed to access microphone.");
+        return;
       }
     }
+
+    // Start with video disabled (audio-only join by default)
+    for (const track of stream.getVideoTracks()) {
+      track.enabled = false;
+    }
+
+    localStreamRef.current = stream;
+    setLocalStream(stream);
+
+    socket.emit("voice_join", channelId, async (response) => {
+      if (!response.ok) {
+        stream.getTracks().forEach(t => t.stop());
+        localStreamRef.current = null;
+        setLocalStream(null);
+        setError(response.error || "Failed to join voice channel");
+        return;
+      }
+
+      setCurrentChannelId(channelId);
+      setIsConnected(true);
+      setParticipants(response.participants || []);
+      setIsMuted(false);
+      setIsDeafened(false);
+      setIsVideoOn(false);
+
+      // Create peer connections to existing participants and send offers
+      const existingPeers = (response.participants || []).filter(p => p.userId !== userId);
+      for (const peer of existingPeers) {
+        const pc = createPeerConnection(peer.userId, stream);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        socket.emit("voice_offer", {
+          to: peer.userId,
+          offer: pc.localDescription!.toJSON() as RTCSessionDescriptionLike,
+        });
+      }
+    });
   }, [userId, createPeerConnection]);
 
   const leaveChannel = useCallback(() => {
@@ -148,6 +184,7 @@ export function useVoice(userId: string): UseVoiceReturn {
       localStreamRef.current.getTracks().forEach(t => t.stop());
       localStreamRef.current = null;
     }
+    setLocalStream(null);
 
     cleanupConnections();
     socket.emit("voice_leave", () => {});
@@ -157,6 +194,7 @@ export function useVoice(userId: string): UseVoiceReturn {
     setParticipants([]);
     setIsMuted(false);
     setIsDeafened(false);
+    setIsVideoOn(false);
   }, [cleanupConnections]);
 
   const toggleMute = useCallback(() => {
@@ -170,7 +208,7 @@ export function useVoice(userId: string): UseVoiceReturn {
       }
     }
 
-    socket.emit("voice_state_update", { isMuted: newMuted, isDeafened: isDeafenedRef.current }, () => {});
+    socket.emit("voice_state_update", { isMuted: newMuted, isDeafened: isDeafenedRef.current, isVideoOn: isVideoOnRef.current }, () => {});
   }, []);
 
   const toggleDeafen = useCallback(() => {
@@ -194,7 +232,24 @@ export function useVoice(userId: string): UseVoiceReturn {
       }
     }
 
-    socket.emit("voice_state_update", { isMuted: newMuted, isDeafened: newDeafened }, () => {});
+    socket.emit("voice_state_update", { isMuted: newMuted, isDeafened: newDeafened, isVideoOn: isVideoOnRef.current }, () => {});
+  }, []);
+
+  const toggleVideo = useCallback(() => {
+    const socket = getSocket();
+    // Check if we have video tracks
+    if (!localStreamRef.current || localStreamRef.current.getVideoTracks().length === 0) {
+      return; // No camera available, do nothing
+    }
+
+    const newVideoOn = !isVideoOnRef.current;
+    setIsVideoOn(newVideoOn);
+
+    for (const track of localStreamRef.current.getVideoTracks()) {
+      track.enabled = newVideoOn;
+    }
+
+    socket.emit("voice_state_update", { isMuted: isMutedRef.current, isDeafened: isDeafenedRef.current, isVideoOn: newVideoOn }, () => {});
   }, []);
 
   // Socket event listeners for voice signaling
@@ -221,12 +276,14 @@ export function useVoice(userId: string): UseVoiceReturn {
       if (pc) { pc.close(); peerConnections.current.delete(data.userId); }
       const audio = audioElements.current.get(data.userId);
       if (audio) { audio.srcObject = null; audioElements.current.delete(data.userId); }
+      remoteStreams.current.delete(data.userId);
+      setStreamVersion(v => v + 1);
     };
 
-    const handleVoiceStateUpdate = (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean }) => {
+    const handleVoiceStateUpdate = (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean }) => {
       if (data.channelId !== currentChannelRef.current) return;
       setParticipants(prev => prev.map(p =>
-        p.userId === data.userId ? { ...p, isMuted: data.isMuted, isDeafened: data.isDeafened } : p
+        p.userId === data.userId ? { ...p, isMuted: data.isMuted, isDeafened: data.isDeafened, isVideoOn: data.isVideoOn } : p
       ));
     };
 
@@ -301,10 +358,14 @@ export function useVoice(userId: string): UseVoiceReturn {
     participants,
     isMuted,
     isDeafened,
+    isVideoOn,
+    localStream,
+    remoteStreams: remoteStreams.current,
     error,
     joinChannel,
     leaveChannel,
     toggleMute,
     toggleDeafen,
+    toggleVideo,
   };
 }

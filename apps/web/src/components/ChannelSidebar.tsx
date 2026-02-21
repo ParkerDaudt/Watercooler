@@ -1,7 +1,7 @@
 "use client";
 import { useState, type ReactNode } from "react";
 import type { Channel, ChannelCategory, VoiceParticipant } from "@watercooler/shared";
-import { Hash, Lock, User, Plus, Megaphone, ChevronDown, ChevronRight, Settings, Volume2, MicOff, HeadphoneOff } from "lucide-react";
+import { Hash, Lock, User, Plus, Megaphone, ChevronDown, ChevronRight, Settings, Volume2, MicOff, HeadphoneOff, Camera } from "lucide-react";
 
 interface Props {
   channels: Channel[];
@@ -194,6 +194,7 @@ function ChannelButton({ channel, isActive, unreadCount, onClick, voiceParticipa
                 {p.avatarUrl ? <img src={p.avatarUrl} alt="" className="w-full h-full object-cover" /> : p.username.charAt(0).toUpperCase()}
               </div>
               <span className="truncate">{p.username}</span>
+              {p.isVideoOn && <Camera size={10} className="text-green-400 shrink-0" />}
               {p.isDeafened && <HeadphoneOff size={10} className="text-red-400 shrink-0" />}
               {!p.isDeafened && p.isMuted && <MicOff size={10} className="text-red-400 shrink-0" />}
             </div>

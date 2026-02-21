@@ -25,6 +25,7 @@ export interface VoiceParticipant {
   avatarUrl: string | null;
   isMuted: boolean;
   isDeafened: boolean;
+  isVideoOn: boolean;
 }
 
 export interface VoiceChannelState {
@@ -316,7 +317,7 @@ export interface ServerToClientEvents {
   // Voice events
   voice_user_joined: (data: { channelId: string; participant: VoiceParticipant }) => void;
   voice_user_left: (data: { channelId: string; userId: string }) => void;
-  voice_state_update: (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean }) => void;
+  voice_state_update: (data: { channelId: string; userId: string; isMuted: boolean; isDeafened: boolean; isVideoOn: boolean }) => void;
   voice_offer: (data: { from: string; offer: RTCSessionDescriptionLike }) => void;
   voice_answer: (data: { from: string; answer: RTCSessionDescriptionLike }) => void;
   voice_ice_candidate: (data: { from: string; candidate: RTCIceCandidateLike }) => void;
@@ -365,7 +366,7 @@ export interface ClientToServerEvents {
   voice_answer: (data: { to: string; answer: RTCSessionDescriptionLike }) => void;
   voice_ice_candidate: (data: { to: string; candidate: RTCIceCandidateLike }) => void;
   voice_state_update: (
-    data: { isMuted: boolean; isDeafened: boolean },
+    data: { isMuted: boolean; isDeafened: boolean; isVideoOn: boolean },
     callback: (response: { ok: boolean; error?: string }) => void
   ) => void;
   get_voice_states: (

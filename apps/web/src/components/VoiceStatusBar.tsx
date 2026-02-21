@@ -1,16 +1,18 @@
 "use client";
-import { Volume2, MicOff, HeadphoneOff, PhoneOff, Mic, Headphones } from "lucide-react";
+import { Volume2, MicOff, HeadphoneOff, PhoneOff, Mic, Headphones, Camera, CameraOff } from "lucide-react";
 
 interface Props {
   channelName: string;
   isMuted: boolean;
   isDeafened: boolean;
+  isVideoOn: boolean;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
+  onToggleVideo: () => void;
   onDisconnect: () => void;
 }
 
-export function VoiceStatusBar({ channelName, isMuted, isDeafened, onToggleMute, onToggleDeafen, onDisconnect }: Props) {
+export function VoiceStatusBar({ channelName, isMuted, isDeafened, isVideoOn, onToggleMute, onToggleDeafen, onToggleVideo, onDisconnect }: Props) {
   return (
     <div className="border-t border-[var(--border)] bg-[var(--card)] p-2">
       <div className="flex items-center gap-2 mb-1.5">
@@ -34,6 +36,13 @@ export function VoiceStatusBar({ channelName, isMuted, isDeafened, onToggleMute,
           title={isDeafened ? "Undeafen" : "Deafen"}
         >
           {isDeafened ? <HeadphoneOff size={14} /> : <Headphones size={14} />}
+        </button>
+        <button
+          onClick={onToggleVideo}
+          className={`p-1.5 rounded ${isVideoOn ? "text-green-500 bg-green-500/10" : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]"}`}
+          title={isVideoOn ? "Turn off camera" : "Turn on camera"}
+        >
+          {isVideoOn ? <Camera size={14} /> : <CameraOff size={14} />}
         </button>
         <button
           onClick={onDisconnect}

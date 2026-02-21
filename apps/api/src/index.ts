@@ -72,7 +72,7 @@ app.addHook("onSend", async (_request, reply) => {
   reply.header("X-Frame-Options", "DENY");
   reply.header("X-XSS-Protection", "0"); // modern browsers use CSP instead
   reply.header("Referrer-Policy", "strict-origin-when-cross-origin");
-  reply.header("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
+  reply.header("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()");
   reply.header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'");
   if (env.NODE_ENV === "production") {
     reply.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
