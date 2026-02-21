@@ -122,7 +122,6 @@ SESSION_SECRET=dev_secret_change_in_production_32chars
 PORT=3001
 UPLOAD_MAX_MB=10
 UPLOAD_DIR=./data/uploads
-CORS_ORIGIN=http://localhost:3000
 NODE_ENV=development
 ```
 
@@ -165,7 +164,6 @@ DOMAIN=chat.yourdomain.com
 POSTGRES_PASSWORD=<strong-random-password>
 DATABASE_URL=postgresql://watercooler:<same-password>@postgres:5432/watercooler
 SESSION_SECRET=<run: openssl rand -hex 32>
-CORS_ORIGIN=https://chat.yourdomain.com
 ```
 
 ### 2. Deploy
@@ -195,8 +193,8 @@ For home servers or LAN use without a public domain:
 # Use the HTTP-only Caddyfile
 cp infra/Caddyfile.local infra/Caddyfile
 
-# Set CORS_ORIGIN in .env to your server's IP
-CORS_ORIGIN=http://192.168.1.100
+# Set DOMAIN in .env to your server's IP
+DOMAIN=192.168.1.100
 
 docker compose up -d --build
 ```
@@ -214,9 +212,9 @@ Access at `http://your-server-ip`.
 | `PORT` | No | `3001` | API server port |
 | `UPLOAD_MAX_MB` | No | `10` | Max file upload size in MB |
 | `UPLOAD_DIR` | No | `/data/uploads` | Upload storage directory |
-| `CORS_ORIGIN` | No | `http://localhost:3000` | Allowed CORS origin (must match how users access the site) |
+| `DOMAIN` | No | `localhost` | Your domain or IP — CORS origin is derived automatically |
+| `CORS_ORIGIN` | No | *(auto)* | Override CORS origin (auto-derived from `DOMAIN` if not set) |
 | `NODE_ENV` | No | `development` | `development` or `production` |
-| `DOMAIN` | No | `localhost` | Domain for Caddy TLS (Docker only) |
 | `POSTGRES_USER` | No | `watercooler` | PostgreSQL user (Docker only) |
 | `POSTGRES_PASSWORD` | No | `changeme` | PostgreSQL password (Docker only) |
 | `POSTGRES_DB` | No | `watercooler` | PostgreSQL database name (Docker only) |

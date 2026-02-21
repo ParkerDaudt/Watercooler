@@ -28,7 +28,7 @@ services:
       PORT: 3001
       UPLOAD_MAX_MB: ${UPLOAD_MAX_MB:-10}
       UPLOAD_DIR: /data/uploads
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      DOMAIN: ${DOMAIN:-localhost}
       NODE_ENV: production
     volumes:
       - uploads:/data/uploads
