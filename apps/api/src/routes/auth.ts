@@ -301,6 +301,41 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true, recoveryKey: newRecoveryKey };
   });
 
+  // Regenerate recovery key (authenticated, requires current password)
+  app.post("/api/auth/regenerate-recovery-key", { preHandler: [authHook] }, async (request, reply) => {
+    const req = request as AuthedRequest;
+    const { currentPassword } = request.body as { currentPassword?: string };
+
+    if (!currentPassword) {
+      return reply.code(400).send({ error: "Current password is required" });
+    }
+
+    const [user] = await db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.id, req.user.id))
+      .limit(1);
+
+    if (!user) {
+      return reply.code(404).send({ error: "User not found" });
+    }
+
+    const valid = await verify(user.passwordHash, currentPassword);
+    if (!valid) {
+      return reply.code(401).send({ error: "Current password is incorrect" });
+    }
+
+    const newRecoveryKey = generateRecoveryKey();
+    const recoveryKeyHash = await hash(newRecoveryKey);
+
+    await db
+      .update(schema.users)
+      .set({ recoveryKeyHash })
+      .where(eq(schema.users.id, user.id));
+
+    return { recoveryKey: newRecoveryKey };
+  });
+
   // Returns the session token for Socket.IO auth (cookie is HTTP-only so JS can't read it)
   app.get("/api/auth/token", { preHandler: [authHook] }, async (request) => {
     const token = request.cookies.session;

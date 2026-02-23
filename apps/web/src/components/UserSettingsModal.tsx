@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import type { User } from "@watercooler/shared";
-import { X, UserIcon, Lock, Palette, Camera, Github, Twitter, Globe } from "lucide-react";
+import { X, UserIcon, Lock, Palette, Camera, Github, Twitter, Globe, KeyRound, Copy, Check } from "lucide-react";
 import { UserAvatar } from "./UserAvatar";
 
 interface Props {
@@ -324,6 +324,12 @@ function AccountTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User
   const [pwError, setPwError] = useState("");
   const [pwSuccess, setPwSuccess] = useState("");
 
+  const [rkPassword, setRkPassword] = useState("");
+  const [rkLoading, setRkLoading] = useState(false);
+  const [rkError, setRkError] = useState("");
+  const [rkNewKey, setRkNewKey] = useState<string | null>(null);
+  const [rkCopied, setRkCopied] = useState(false);
+
   const handleEmailSave = async () => {
     setEmailError("");
     setEmailSuccess("");
@@ -368,6 +374,27 @@ function AccountTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User
     } finally {
       setPwSaving(false);
     }
+  };
+
+  const handleRegenerateKey = async () => {
+    setRkError("");
+    setRkLoading(true);
+    try {
+      const { recoveryKey } = await api.post<{ recoveryKey: string }>("/api/auth/regenerate-recovery-key", { currentPassword: rkPassword });
+      setRkNewKey(recoveryKey);
+      setRkPassword("");
+    } catch (err: any) {
+      setRkError(err.message || "Failed to regenerate recovery key");
+    } finally {
+      setRkLoading(false);
+    }
+  };
+
+  const copyRkKey = async () => {
+    if (!rkNewKey) return;
+    await navigator.clipboard.writeText(rkNewKey);
+    setRkCopied(true);
+    setTimeout(() => setRkCopied(false), 2000);
   };
 
   return (
@@ -437,6 +464,67 @@ function AccountTab({ user, onUserUpdate }: { user: User; onUserUpdate: (u: User
           {pwSaving ? "Changing..." : "Change Password"}
         </button>
       </div>
+
+      <hr className="border-[var(--border)]" />
+
+      {/* Recovery Key */}
+      {rkNewKey ? (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <KeyRound size={16} className="text-yellow-500" />
+            <h4 className="text-sm font-semibold">New Recovery Key</h4>
+          </div>
+          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
+            <p className="text-sm text-yellow-600 dark:text-yellow-400 font-medium">
+              Save this key — it won't be shown again. Your old key is now invalid.
+            </p>
+          </div>
+          <div className="relative">
+            <code className="block w-full p-4 bg-[var(--muted)] rounded-lg font-mono text-sm break-all select-all">
+              {rkNewKey}
+            </code>
+            <button
+              onClick={copyRkKey}
+              className="absolute top-2 right-2 p-2 hover:bg-[var(--border)] rounded-lg transition-colors"
+              title="Copy to clipboard"
+            >
+              {rkCopied ? <Check size={16} className="text-green-500" /> : <Copy size={16} className="text-[var(--muted-foreground)]" />}
+            </button>
+          </div>
+          <button
+            onClick={() => setRkNewKey(null)}
+            className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg hover:opacity-90 text-sm"
+          >
+            I've Saved My Key
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div>
+            <h4 className="text-sm font-semibold">Recovery Key</h4>
+            <p className="text-xs text-[var(--muted-foreground)] mt-1">
+              Generate a new recovery key. Your current key will be immediately invalidated.
+            </p>
+          </div>
+          <div>
+            <label className="block text-xs text-[var(--muted-foreground)] mb-1">Current Password</label>
+            <input
+              type="password"
+              value={rkPassword}
+              onChange={(e) => setRkPassword(e.target.value)}
+              className="w-full px-3 py-2 bg-[var(--muted)] rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+            />
+          </div>
+          {rkError && <p className="text-sm text-[var(--destructive)]">{rkError}</p>}
+          <button
+            onClick={handleRegenerateKey}
+            disabled={rkLoading || !rkPassword}
+            className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:opacity-90 disabled:opacity-50 text-sm"
+          >
+            {rkLoading ? "Regenerating..." : "Regenerate Recovery Key"}
+          </button>
+        </div>
+      )}
 
       <hr className="border-[var(--border)]" />
 
