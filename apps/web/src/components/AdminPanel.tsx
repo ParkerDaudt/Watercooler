@@ -2,9 +2,9 @@
 import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import type { Warning } from "@watercooler/shared";
-import { Shield, Users, Link2, Flag, ClipboardList, Plus, X, Hash, Image, Palette, FolderOpen, Pencil, Trash2, AlertTriangle, History, Volume2 } from "lucide-react";
+import { Shield, Users, Link2, Flag, ClipboardList, Plus, X, Hash, Image, Palette, FolderOpen, Pencil, Trash2, AlertTriangle, History, Volume2, UserCheck } from "lucide-react";
 
-type Tab = "members" | "invites" | "reports" | "audit" | "channels" | "categories" | "settings";
+type Tab = "members" | "invites" | "join-requests" | "reports" | "audit" | "channels" | "categories" | "settings";
 
 export function AdminPanel() {
   const [tab, setTab] = useState<Tab>("members");
@@ -16,7 +16,7 @@ export function AdminPanel() {
         <span className="font-semibold text-sm">Admin Panel</span>
       </div>
       <div className="flex border-b border-[var(--border)] overflow-x-auto">
-        {(["members", "invites", "reports", "audit", "channels", "categories", "settings"] as Tab[]).map((t) => (
+        {(["members", "invites", "join-requests", "reports", "audit", "channels", "categories", "settings"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -26,13 +26,14 @@ export function AdminPanel() {
                 : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             }`}
           >
-            {t}
+            {t === "join-requests" ? "Join Requests" : t}
           </button>
         ))}
       </div>
       <div className="flex-1 overflow-y-auto p-4">
         {tab === "members" && <MembersTab />}
         {tab === "invites" && <InvitesTab />}
+        {tab === "join-requests" && <JoinRequestsTab />}
         {tab === "reports" && <ReportsTab />}
         {tab === "audit" && <AuditTab />}
         {tab === "channels" && <ChannelsTab />}
@@ -662,6 +663,94 @@ function ChannelsTab() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function JoinRequestsTab() {
+  const [requests, setRequests] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = () => {
+    setLoading(true);
+    api.get<any[]>("/api/join-requests")
+      .then(setRequests)
+      .catch(() => setRequests([]))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const handle = async (id: string, status: "approved" | "denied") => {
+    try {
+      await api.patch(`/api/join-requests/${id}`, { status });
+      load();
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const pending = requests.filter((r) => r.status === "pending");
+  const resolved = requests.filter((r) => r.status !== "pending");
+
+  if (loading) return <p className="text-sm text-[var(--muted-foreground)]">Loading...</p>;
+
+  return (
+    <div className="space-y-6">
+      <div className="space-y-2">
+        <h3 className="font-semibold flex items-center gap-2">
+          <UserCheck size={16} />
+          Pending ({pending.length})
+        </h3>
+        {pending.length === 0 ? (
+          <p className="text-sm text-[var(--muted-foreground)]">No pending requests.</p>
+        ) : (
+          <div className="space-y-2">
+            {pending.map((r) => (
+              <div key={r.id} className="flex items-center justify-between p-3 bg-[var(--card)] border border-[var(--border)] rounded-lg">
+                <div>
+                  <p className="text-sm font-medium">{r.username}</p>
+                  <p className="text-xs text-[var(--muted-foreground)]">
+                    {new Date(r.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handle(r.id, "approved")}
+                    className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:opacity-90"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => handle(r.id, "denied")}
+                    className="px-3 py-1.5 text-xs bg-[var(--destructive)] text-white rounded-lg hover:opacity-90"
+                  >
+                    Deny
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {resolved.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="font-semibold text-[var(--muted-foreground)]">Resolved ({resolved.length})</h3>
+          <div className="space-y-2">
+            {resolved.map((r) => (
+              <div key={r.id} className="flex items-center justify-between p-3 bg-[var(--card)] border border-[var(--border)] rounded-lg opacity-60">
+                <p className="text-sm">{r.username}</p>
+                <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                  r.status === "approved" ? "bg-green-500/20 text-green-600" : "bg-red-500/20 text-red-600"
+                }`}>
+                  {r.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

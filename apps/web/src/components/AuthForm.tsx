@@ -6,11 +6,13 @@ interface Props {
   onLogin: (email: string, password: string) => Promise<unknown>;
   onSignup: (email: string, password: string, username: string, inviteCode?: string) => Promise<{ recoveryKey: string }>;
   onResetPassword: (email: string, recoveryKey: string, newPassword: string) => Promise<{ recoveryKey: string }>;
+  onRequestAccess: (email: string, password: string, username: string) => Promise<{ recoveryKey: string }>;
   onFinishAuth: () => void;
+  requestToJoin?: boolean;
 }
 
-export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: Props) {
-  const [mode, setMode] = useState<"login" | "signup" | "reset">("login");
+export function AuthForm({ onLogin, onSignup, onResetPassword, onRequestAccess, onFinishAuth, requestToJoin }: Props) {
+  const [mode, setMode] = useState<"login" | "signup" | "reset" | "request">("login");
   const [form, setForm] = useState({ email: "", password: "", username: "", inviteCode: "", confirmPassword: "", recoveryKey: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -49,6 +51,9 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
         }
         const result = await onResetPassword(form.email, form.recoveryKey, form.password);
         setShowRecoveryKey(result.recoveryKey);
+      } else if (mode === "request") {
+        const result = await onRequestAccess(form.email, form.password, form.username);
+        setShowRecoveryKey(result.recoveryKey);
       }
     } catch (err: any) {
       setError(err.message);
@@ -78,6 +83,13 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
             </h1>
           </div>
 
+          {mode === "request" && (
+            <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 mb-4">
+              <p className="text-sm text-blue-600 dark:text-blue-400 font-medium">
+                Your request has been submitted! An admin will review it shortly. Once approved, you can log in.
+              </p>
+            </div>
+          )}
           <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
             <p className="text-sm text-yellow-600 dark:text-yellow-400 font-medium">
               This is the only time this key will be shown. Save it somewhere safe — you'll need it to reset your password if you ever forget it.
@@ -100,7 +112,7 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
           <button
             onClick={() => {
               setShowRecoveryKey(null);
-              if (mode === "reset") {
+              if (mode === "reset" || mode === "request") {
                 setMode("login");
                 setForm({ email: "", password: "", username: "", inviteCode: "", confirmPassword: "", recoveryKey: "" });
               } else if (mode === "signup") {
@@ -109,7 +121,7 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
             }}
             className="w-full py-2 px-4 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg font-medium hover:opacity-90"
           >
-            {mode === "reset" ? "Back to Login" : "I've Saved My Key"}
+            {mode === "reset" || mode === "request" ? "Back to Login" : "I've Saved My Key"}
           </button>
         </div>
       </div>
@@ -120,10 +132,10 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
     <div className="min-h-screen flex items-center justify-center bg-[var(--background)] p-4">
       <div className="w-full max-w-md bg-[var(--card)] rounded-xl border border-[var(--border)] p-8 shadow-lg">
         <h1 className="text-2xl font-bold mb-6">
-          {mode === "login" ? "Welcome back" : mode === "signup" ? "Create account" : "Reset Password"}
+          {mode === "login" ? "Welcome back" : mode === "signup" ? "Create account" : mode === "reset" ? "Reset Password" : "Request Access"}
         </h1>
         <form onSubmit={handleSubmit} className="space-y-4">
-          {mode === "signup" && (
+          {(mode === "signup" || mode === "request") && (
             <>
               <div>
                 <label className="block text-sm font-medium mb-1">Username</label>
@@ -135,17 +147,19 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
                   className="w-full px-3 py-2 rounded-lg bg-[var(--muted)] border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Invite Code</label>
-                <input
-                  type="text"
-                  required
-                  value={form.inviteCode}
-                  onChange={(e) => setForm((f) => ({ ...f, inviteCode: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg bg-[var(--muted)] border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
-                  placeholder="Enter your invite code"
-                />
-              </div>
+              {mode === "signup" && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Invite Code</label>
+                  <input
+                    type="text"
+                    required
+                    value={form.inviteCode}
+                    onChange={(e) => setForm((f) => ({ ...f, inviteCode: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-lg bg-[var(--muted)] border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]"
+                    placeholder="Enter your invite code"
+                  />
+                </div>
+              )}
             </>
           )}
           <div>
@@ -203,7 +217,7 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
             disabled={loading}
             className="w-full py-2 px-4 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
           >
-            {loading ? "..." : mode === "login" ? "Log in" : mode === "signup" ? "Sign up" : "Reset Password"}
+            {loading ? "..." : mode === "login" ? "Log in" : mode === "signup" ? "Sign up" : mode === "reset" ? "Reset Password" : "Request Access"}
           </button>
         </form>
         <div className="mt-4 text-center text-sm text-[var(--muted-foreground)] space-y-1">
@@ -218,6 +232,16 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
                   Sign up
                 </button>
               </p>
+              {requestToJoin && (
+                <p>
+                  <button
+                    onClick={() => { setMode("request"); setError(""); }}
+                    className="text-[var(--primary)] hover:underline"
+                  >
+                    Request access
+                  </button>
+                </p>
+              )}
               <p>
                 <button
                   onClick={() => { setMode("reset"); setError(""); }}
@@ -242,6 +266,17 @@ export function AuthForm({ onLogin, onSignup, onResetPassword, onFinishAuth }: P
           {mode === "reset" && (
             <p>
               Remember your password?{" "}
+              <button
+                onClick={() => { setMode("login"); setError(""); }}
+                className="text-[var(--primary)] hover:underline"
+              >
+                Log in
+              </button>
+            </p>
+          )}
+          {mode === "request" && (
+            <p>
+              Already have an account?{" "}
               <button
                 onClick={() => { setMode("login"); setError(""); }}
                 className="text-[var(--primary)] hover:underline"

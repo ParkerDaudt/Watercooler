@@ -7,6 +7,7 @@ interface AuthState {
   user: User | null;
   loading: boolean;
   bootstrapped: boolean | null;
+  requestToJoin: boolean;
 }
 
 export function useAuth() {
@@ -14,23 +15,24 @@ export function useAuth() {
     user: null,
     loading: true,
     bootstrapped: null,
+    requestToJoin: false,
   });
 
   const checkAuth = useCallback(async () => {
     try {
-      const { bootstrapped } = await api.get<{ bootstrapped: boolean }>("/api/auth/status");
-      if (!bootstrapped) {
-        setState({ user: null, loading: false, bootstrapped: false });
+      const status = await api.get<{ bootstrapped: boolean; requestToJoin: boolean }>("/api/auth/status");
+      if (!status.bootstrapped) {
+        setState({ user: null, loading: false, bootstrapped: false, requestToJoin: false });
         return;
       }
       try {
         const { user } = await api.get<{ user: User }>("/api/auth/me");
-        setState({ user, loading: false, bootstrapped: true });
+        setState({ user, loading: false, bootstrapped: true, requestToJoin: status.requestToJoin });
       } catch {
-        setState({ user: null, loading: false, bootstrapped: true });
+        setState({ user: null, loading: false, bootstrapped: true, requestToJoin: status.requestToJoin });
       }
     } catch {
-      setState({ user: null, loading: false, bootstrapped: null });
+      setState({ user: null, loading: false, bootstrapped: null, requestToJoin: false });
     }
   }, []);
 
@@ -83,6 +85,14 @@ export function useAuth() {
     }
   };
 
+  const requestAccess = async (email: string, password: string, username: string) => {
+    return api.post<{ ok: boolean; recoveryKey: string }>("/api/auth/request-access", {
+      email,
+      password,
+      username,
+    });
+  };
+
   const resetPassword = async (email: string, recoveryKey: string, newPassword: string) => {
     return api.post<{ ok: boolean; recoveryKey: string }>("/api/auth/reset-password", {
       email,
@@ -96,5 +106,5 @@ export function useAuth() {
     setState((s) => ({ ...s, user: null }));
   };
 
-  return { ...state, login, signup, finishAuth, bootstrap, logout, checkAuth, resetPassword };
+  return { ...state, login, signup, finishAuth, bootstrap, logout, checkAuth, resetPassword, requestAccess };
 }

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq, and } from "drizzle-orm";
 import { db, schema } from "../db/index.js";
+
 import { handleJoinRequestSchema } from "@watercooler/shared";
 import {
   authHook,
@@ -99,11 +100,21 @@ export async function joinRequestRoutes(app: FastifyInstance) {
         .where(eq(schema.joinRequests.id, requestId));
 
       if (data.status === "approved") {
-        await db.insert(schema.memberships).values({
+        const [membership] = await db.insert(schema.memberships).values({
           userId: jr.userId,
           communityId: jr.communityId,
           role: "member",
-        });
+        }).returning();
+
+        // Assign the @everyone role
+        const [everyoneRole] = await db
+          .select()
+          .from(schema.roles)
+          .where(and(eq(schema.roles.communityId, jr.communityId), eq(schema.roles.isEveryone, true)))
+          .limit(1);
+        if (everyoneRole) {
+          await db.insert(schema.userRoles).values({ membershipId: membership.id, roleId: everyoneRole.id }).onConflictDoNothing();
+        }
       }
 
       return { ok: true };

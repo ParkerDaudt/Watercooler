@@ -102,7 +102,46 @@ async function assignMembershipRoles(membershipId: string, communityId: string, 
 export async function authRoutes(app: FastifyInstance) {
   app.get("/api/auth/status", async () => {
     const [community] = await db.select().from(schema.communities).limit(1);
-    return { bootstrapped: !!community };
+    return {
+      bootstrapped: !!community,
+      requestToJoin: community?.requestToJoin ?? false,
+    };
+  });
+
+  // Request access (unauthenticated) — creates account + join request, no session cookie
+  app.post("/api/auth/request-access", async (request, reply) => {
+    const [community] = await db.select().from(schema.communities).limit(1);
+    if (!community) return reply.code(400).send({ error: "Community not set up" });
+    if (!community.requestToJoin) {
+      return reply.code(400).send({ error: "This community does not accept join requests" });
+    }
+
+    const parsed = signupSchema.omit({ inviteCode: true }).safeParse(request.body);
+    if (!parsed.success) {
+      const messages = parsed.error.errors.map(e => e.message).join(". ");
+      return reply.code(400).send({ error: messages });
+    }
+    const data = parsed.data;
+
+    const [existingEmail] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, data.email)).limit(1);
+    const [existingUsername] = await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.username, data.username)).limit(1);
+    if (existingEmail || existingUsername) {
+      return reply.code(409).send({ error: "Email or username is unavailable" });
+    }
+
+    const passwordHash = await hash(data.password);
+    const recoveryKey = generateRecoveryKey();
+    const recoveryKeyHash = await hash(recoveryKey);
+
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: data.email, username: data.username, passwordHash, recoveryKeyHash })
+      .returning();
+
+    await db.insert(schema.joinRequests).values({ communityId: community.id, userId: user.id });
+
+    // Return recoveryKey — user must save it before their request is approved
+    return { ok: true, recoveryKey };
   });
 
   app.post("/api/auth/bootstrap", async (request, reply) => {
